@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package quic.backbone.v1;
+
+option go_package = "github.com/voilet/QuicFlow/pkg/protocol;protocol";
+
+// 数据消息
+message DataMessage {
+  string msg_id       = 1;  // 消息唯一 ID（UUID）
+  string sender_id    = 2;  // 发送方 ID
+  string receiver_id  = 3;  // 接收方 ID（空表示广播）
+  MessageType type    = 4;  // 消息类型
+  bytes payload       = 5;  // 业务数据（JSON 或 Protobuf）
+  bool wait_ack       = 6;  // 是否需要确认
+  int64 timestamp     = 7;  // 发送时间戳（Unix 毫秒）
+}
+
+// 消息类型（业务层自定义）
+enum MessageType {
+  MESSAGE_TYPE_UNSPECIFIED = 0;
+  MESSAGE_TYPE_COMMAND     = 1;  // 指令
+  MESSAGE_TYPE_EVENT       = 2;  // 事件
+  MESSAGE_TYPE_QUERY       = 3;  // 查询
+  MESSAGE_TYPE_RESPONSE    = 4;  // 响应
+}
+
+// 确认消息
+message AckMessage {
+  string msg_id    = 1;  // 对应的消息 ID
+  AckStatus status = 2;  // 执行状态
+  bytes result     = 3;  // 执行结果（可选）
+  string error     = 4;  // 错误信息（如果失败）
+}
+
+// 确认状态
+enum AckStatus {
+  ACK_STATUS_UNSPECIFIED = 0;
+  ACK_STATUS_SUCCESS     = 1;  // 成功
+  ACK_STATUS_FAILURE     = 2;  // 失败
+  ACK_STATUS_TIMEOUT     = 3;  // 超时
+}

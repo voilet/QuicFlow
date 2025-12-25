@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package quic.backbone.v1;
+
+option go_package = "github.com/voilet/QuicFlow/pkg/protocol;protocol";
+
+// 帧类型
+enum FrameType {
+  FRAME_TYPE_UNSPECIFIED = 0;
+  FRAME_TYPE_PING        = 1;  // 心跳请求
+  FRAME_TYPE_PONG        = 2;  // 心跳响应
+  FRAME_TYPE_DATA        = 3;  // 数据消息
+  FRAME_TYPE_ACK         = 4;  // 确认帧
+}
+
+// 顶层帧结构（流的第一个消息）
+message Frame {
+  FrameType type        = 1;   // 帧类型
+  bytes     payload     = 2;   // 根据 type 包含不同的消息
+  int64     timestamp   = 3;   // Unix 毫秒时间戳
+}
+
+// 心跳请求
+message PingFrame {
+  string client_id = 1;  // 客户端 ID
+}
+
+// 心跳响应
+message PongFrame {
+  int64 server_time = 1;  // 服务器时间戳（用于时钟同步检查）
+}

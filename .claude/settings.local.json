@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(ls:*)",
+      "Bash(bash:*)",
+      "Bash(git checkout:*)",
+      "Bash(git branch:*)",
+      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)",
+      "Bash(if [ -d \"/Users/voilet/project/go_prod/src/quic_project/specs/001-quic-backbone-network/checklists\" ])",
+      "Bash(then ls -la \"/Users/voilet/project/go_prod/src/quic_project/specs/001-quic-backbone-network/checklists/\")",
+      "Bash(else echo \"No checklists directory found\")",
+      "Bash(fi)",
+      "Bash(go mod init:*)",
+      "Bash(mkdir:*)",
+      "Bash(go get:*)",
+      "Bash(chmod:*)",
+      "Bash(./scripts/gen-certs.sh:*)",
+      "Bash(protoc:*)",
+      "Bash(go install:*)",
+      "Bash(tree:*)",
+      "Bash(go build:*)",
+      "Bash(go list:*)",
+      "Bash(go doc:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(./scripts/test-mvp.sh:*)",
+      "Bash(cat:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(./scripts/test-reconnect.sh:*)",
+      "Bash(./bin/quic-ctl:*)",
+      "Bash(./scripts/test-cli.sh:*)",
+      "Bash(find:*)",
+      "Bash(xargs:*)"
+    ]
+  }
+}

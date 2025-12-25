@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package quic.backbone.v1;
+
+option go_package = "github.com/voilet/QuicFlow/pkg/protocol;protocol";
+
+// 客户端信息
+message ClientInfo {
+  string client_id      = 1;  // 客户端唯一标识
+  string remote_addr    = 2;  // 远程地址
+  int64  connected_at   = 3;  // 连接时间（Unix 毫秒时间戳）
+  int64  last_heartbeat = 4;  // 最后心跳时间（Unix 毫秒时间戳）
+  ClientState state     = 5;  // 客户端状态
+}
+
+// 客户端状态
+enum ClientState {
+  CLIENT_STATE_UNSPECIFIED = 0;
+  CLIENT_STATE_IDLE        = 1;  // 空闲（未连接）
+  CLIENT_STATE_CONNECTING  = 2;  // 连接中
+  CLIENT_STATE_CONNECTED   = 3;  // 已连接
+}
+
+// 指标快照
+message MetricsSnapshot {
+  int64 connected_clients    = 1;  // 当前连接的客户端数量
+  int64 total_connections    = 2;  // 总连接数（累计）
+  int64 message_throughput   = 3;  // 消息吞吐量（消息/秒）
+  int64 average_latency      = 4;  // 平均延迟（毫秒）
+  int64 p99_latency          = 5;  // P99 延迟（毫秒）
+  int64 timestamp            = 6;  // 快照时间戳
+}

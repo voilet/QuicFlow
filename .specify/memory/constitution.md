@@ -1,50 +1,187 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report:
+- Version change: 1.0.0 → 2.0.0
+- Modified principles:
+  I. 客户交互汉化（强制） → I. 可靠优先（强制）
+  II. 程序稳定性优先（强制） → II. 低耦合消息处理（强制）
+  III. 结构化文档（强制） → III. 透明化监控（强制）
+- Added sections: 实现标准, 合规性检查清单
+- Removed sections: 汉化标准, 不汉化内容
+- Templates requiring updates:
+  ✅ .specify/memory/constitution.md (updated)
+  ✅ .specify/templates/plan-template.md (reviewed - constitution check section aligns)
+  ✅ .specify/templates/spec-template.md (reviewed - requirements section aligns)
+  ✅ .specify/templates/tasks-template.md (reviewed - task categorization aligns)
+- Follow-up TODOs: None
+-->
 
-## Core Principles
+# QUIC 通信骨干网络项目宪章
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+## 项目愿景
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+打造一个工业级、高性能且具备强一致性回调机制的 QUIC 通信骨干网络。
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+## 核心原则
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### I. 可靠优先（强制）
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+即便在弱网环境下，系统必须通过 QUIC 层的重传和应用层的重连机制确保指令必达：
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+- **必须实现**：QUIC 协议层面的可靠传输保证（丢包重传、乱序重组）
+- **必须实现**：应用层的自动重连机制，在网络中断后自动恢复连接
+- **必须实现**：指令回调确认机制，确保每条指令的送达状态可追踪
+- **必须实现**：在弱网环境下的降级策略（超时重试、指数退避等）
+- **禁止**：假设网络始终可靠的设计模式
+- **禁止**：无确认的单向消息发送（除非明确标记为"尽力而为"）
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+**理由**：在工业级应用场景中，指令的可靠送达直接关系到系统的正确性和安全性。
+网络故障是常态而非异常，系统必须从设计层面保证在各种网络条件下的可靠性。
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### II. 低耦合消息处理（强制）
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+指令下发与业务逻辑必须分离，支持热插拔的数据处理插件：
 
-## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+- **必须实现**：消息传输层与业务处理层的清晰分离（解耦架构）
+- **必须实现**：插件化的消息处理机制，支持运行时加载/卸载处理器
+- **必须实现**：标准化的消息处理接口（定义清晰的输入/输出契约）
+- **必须实现**：消息路由机制，根据消息类型分发到相应的处理器
+- **推荐实现**：处理器的版本管理和兼容性检查
+- **禁止**：在传输层代码中硬编码业务逻辑
+- **禁止**：处理器之间的直接依赖（应通过消息总线通信）
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+**理由**：低耦合设计使系统具备灵活性和可扩展性，业务逻辑的变更不应影响底层
+通信骨干网络的稳定性。插件化架构支持不同业务场景的快速适配和独立演进。
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+### III. 透明化监控（强制）
+
+心跳与连接状态对业务层透明，提供清晰的状态钩子（Hooks）：
+
+- **必须实现**：连接状态的实时监控和上报（连接中、已连接、断开等）
+- **必须实现**：心跳机制对业务层透明运行，不干扰业务消息处理
+- **必须实现**：丰富的状态钩子接口，供业务层订阅关键事件：
+  - 连接建立/断开事件
+  - 心跳超时/恢复事件
+  - 消息发送/接收/确认事件
+  - 重连尝试/成功/失败事件
+- **必须实现**：详细的性能指标采集（延迟、吞吐量、丢包率等）
+- **必须实现**：结构化日志记录，支持问题追溯和性能分析
+- **推荐实现**：可视化监控面板或指标导出接口（Prometheus、Grafana 等）
+- **禁止**：心跳逻辑与业务消息混淆
+- **禁止**：隐藏关键状态变化，业务层无法感知
+
+**理由**：透明的监控能力是生产环境运维的基础。业务层需要了解底层网络状态以做出
+正确决策（如切换策略、限流等），同时心跳等基础设施应自动运行不增加业务复杂度。
+
+## 实现标准
+
+### 架构要求
+
+1. **分层设计**：
+   - 传输层：QUIC 协议实现和连接管理
+   - 协议层：消息编解码、序列化/反序列化
+   - 应用层：消息路由、插件管理、业务接口
+   - 监控层：指标采集、日志记录、状态上报
+
+2. **接口契约**：
+   - 每个层次之间通过定义明确的接口交互
+   - 接口必须文档化（类型定义、行为说明、错误处理）
+   - 版本化管理，向后兼容或明确标注破坏性变更
+
+3. **错误处理**：
+   - 网络错误必须分类（暂时性错误、永久性错误、业务错误）
+   - 每类错误有明确的处理策略和恢复路径
+   - 错误上下文完整（错误码、错误信息、堆栈、相关参数）
+
+### 性能目标
+
+- **连接建立**：正常网络环境下 < 100ms
+- **消息延迟**：P99 延迟 < 50ms（局域网）、< 200ms（广域网）
+- **吞吐量**：单连接支持 > 10,000 消息/秒
+- **并发连接**：单实例支持 > 10,000 并发连接
+- **弱网表现**：在 20% 丢包率下仍能正常通信
+
+### 测试要求
+
+1. **单元测试**：
+   - 核心模块测试覆盖率 > 80%
+   - 边界条件和异常路径必须覆盖
+
+2. **集成测试**：
+   - 完整的消息发送-接收-确认流程测试
+   - 插件加载/卸载/版本升级测试
+   - 连接建立/断开/重连测试
+
+3. **压力测试**：
+   - 高并发场景下的稳定性测试
+   - 长时间运行的内存泄漏检测
+
+4. **弱网测试**：
+   - 模拟丢包、延迟、乱序场景
+   - 验证重传和恢复机制有效性
+
+### 文档要求
+
+- **架构文档**：整体设计、模块划分、数据流向
+- **API 文档**：所有公开接口的详细说明和示例
+- **运维文档**：部署指南、监控指标说明、故障排查手册
+- **插件开发指南**：如何开发和集成自定义消息处理器
+
+## 质量保证
+
+### 代码审查
+
+- 所有变更必须经过代码审查
+- 关注点：可靠性机制、解耦程度、监控完整性、性能影响
+- 重大架构变更需要设计评审
+
+### 合规性检查清单
+
+每个功能实现前必须回答：
+
+1. **可靠性**：
+   - [ ] 网络中断时会发生什么？是否有重连机制？
+   - [ ] 消息发送失败时如何处理？是否有重试和回调？
+   - [ ] 是否考虑了弱网场景？有降级策略吗？
+
+2. **解耦性**：
+   - [ ] 业务逻辑是否独立于传输层？
+   - [ ] 新增消息类型是否需要修改核心代码？
+   - [ ] 处理器能否独立测试和部署？
+
+3. **可观测性**：
+   - [ ] 关键状态变化是否有钩子通知？
+   - [ ] 是否记录了足够的指标和日志？
+   - [ ] 问题发生时能否快速定位？
+
+4. **性能**：
+   - [ ] 是否会成为性能瓶颈？
+   - [ ] 内存使用是否受控？
+   - [ ] 是否有性能测试验证？
+
+### 持续集成
+
+- 自动化测试必须通过才能合并
+- 性能回归测试作为 CI/CD 流程的一部分
+- 代码质量检查（linting、格式化、复杂度分析）
+
+## 治理
+
+### 修订流程
+
+1. 所有宪章修订必须记录版本变更和理由
+2. 原则的增删改需要团队评审和共识
+3. 修订后必须同步更新相关模板和文档
+
+### 版本管理
+
+- **主版本（MAJOR）**：原则的删除、重大重定义、不兼容变更
+- **次版本（MINOR）**：新增原则、扩展现有指南、新增要求
+- **修订版本（PATCH）**：澄清说明、措辞优化、示例补充
+
+### 合规性
+
+- 所有功能开发必须遵循此宪章的核心原则
+- 偏离原则需要明确记录并提供充分理由
+- 定期审查现有代码是否符合宪章要求
+
+**版本**: 2.0.0 | **批准日期**: 2025-12-23 | **最后修订**: 2025-12-23

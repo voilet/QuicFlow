@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package quic.backbone.v1;
+
+option go_package = "github.com/voilet/QuicFlow/pkg/protocol;protocol";
+
+// 客户端信息
+message ClientInfo {
+  string client_id      = 1;  // 客户端唯一标识
+  string remote_addr    = 2;  // 远程地址
+  int64  connected_at   = 3;  // 连接时间（Unix 毫秒时间戳）
+  int64  last_heartbeat = 4;  // 最后心跳时间（Unix 毫秒时间戳）
+  ClientState state     = 5;  // 客户端状态
+}
+
+// 客户端状态
+enum ClientState {
+  CLIENT_STATE_UNSPECIFIED = 0;
+  CLIENT_STATE_IDLE        = 1;  // 空闲（未连接）
+  CLIENT_STATE_CONNECTING  = 2;  // 连接中
+  CLIENT_STATE_CONNECTED   = 3;  // 已连接
+}
+
+// 指标快照
+message MetricsSnapshot {
+  // 连接指标
+  int64 connected_clients    = 1;  // 当前连接的客户端数量
+  int64 total_connections    = 2;  // 总连接数（累计）
+  int64 total_disconnects    = 3;  // 总断开数（累计）
+
+  // 消息指标
+  int64 messages_sent        = 4;  // 发送的消息总数
+  int64 messages_received    = 5;  // 接收的消息总数
+  int64 messages_failed      = 6;  // 发送失败的消息数
+  int64 bytes_sent           = 7;  // 发送的字节总数
+  int64 bytes_received       = 8;  // 接收的字节总数
+  int64 message_throughput   = 9;  // 消息吞吐量（消息/秒）
+
+  // 延迟指标
+  int64 average_latency      = 10; // 平均延迟（毫秒）
+  int64 p50_latency          = 11; // P50 延迟（毫秒）
+  int64 p95_latency          = 12; // P95 延迟（毫秒）
+  int64 p99_latency          = 13; // P99 延迟（毫秒）
+
+  // 心跳指标
+  int64 heartbeats_sent      = 14; // 发送的心跳数
+  int64 heartbeats_received  = 15; // 接收的心跳数
+  int64 heartbeat_timeouts   = 16; // 心跳超时次数
+
+  // Promise 指标
+  int64 promise_created      = 17; // 创建的 Promise 数量
+  int64 promise_completed    = 18; // 完成的 Promise 数量
+  int64 promise_timeouts     = 19; // 超时的 Promise 数量
+  int64 promise_active       = 20; // 当前活跃 Promise 数量
+
+  // 广播指标
+  int64 broadcasts_sent      = 21; // 广播消息次数
+  int64 broadcast_targets    = 22; // 广播目标客户端总数
+
+  // 错误指标
+  int64 encoding_errors      = 23; // 编码错误次数
+  int64 decoding_errors      = 24; // 解码错误次数
+  int64 network_errors       = 25; // 网络错误次数
+
+  // 系统指标
+  int64 uptime_seconds       = 26; // 系统运行时间（秒）
+  int64 timestamp            = 27; // 快照时间戳（Unix 毫秒）
+}
