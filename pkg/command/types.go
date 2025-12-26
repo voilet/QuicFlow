@@ -5,6 +5,153 @@ import (
 	"time"
 )
 
+// ============================================================================
+// 命令类型常量（Server/Client 共享）
+// ============================================================================
+
+const (
+	// 系统命令
+	CmdExecShell  = "exec_shell"  // 执行 Shell 命令
+	CmdGetStatus  = "get_status"  // 获取客户端状态
+	CmdSystemInfo = "system.info" // 获取系统信息
+
+	// 文件操作
+	CmdFileRead  = "file.read"  // 读取文件
+	CmdFileWrite = "file.write" // 写入文件
+	CmdFileList  = "file.list"  // 列出目录
+
+	// 进程管理
+	CmdProcessList = "process.list" // 进程列表
+	CmdProcessKill = "process.kill" // 终止进程
+
+	// 服务管理
+	CmdServiceStatus  = "service.status"  // 服务状态
+	CmdServiceRestart = "service.restart" // 重启服务
+	CmdServiceStop    = "service.stop"    // 停止服务
+	CmdServiceStart   = "service.start"   // 启动服务
+
+	// 配置管理
+	CmdConfigGet    = "config.get"    // 获取配置
+	CmdConfigUpdate = "config.update" // 更新配置
+
+	// 网络诊断
+	CmdNetworkPing  = "network.ping"  // Ping 测试
+	CmdNetworkTrace = "network.trace" // 路由追踪
+
+	// 通用
+	CmdPing = "ping" // 简单存活检测
+	CmdEcho = "echo" // 回显测试
+)
+
+// ============================================================================
+// 共享 Payload/Result 结构（Server 构造，Client 解析/返回）
+// ============================================================================
+
+// --- Shell 命令 ---
+
+// ShellParams exec_shell 命令的参数
+type ShellParams struct {
+	Command string `json:"command"`           // 要执行的命令
+	Timeout int    `json:"timeout,omitempty"` // 超时时间（秒），默认30秒
+	WorkDir string `json:"work_dir,omitempty"` // 工作目录（可选）
+}
+
+// ShellResult exec_shell 命令的结果
+type ShellResult struct {
+	Success  bool   `json:"success"`   // 是否成功
+	ExitCode int    `json:"exit_code"` // 退出码
+	Stdout   string `json:"stdout"`    // 标准输出
+	Stderr   string `json:"stderr"`    // 标准错误
+	Message  string `json:"message"`   // 消息
+}
+
+// --- 状态查询 ---
+
+// StatusResult get_status 命令的结果
+type StatusResult struct {
+	Status      string `json:"status"`        // 状态（running/stopped）
+	Uptime      int64  `json:"uptime"`        // 运行时间（秒）
+	Version     string `json:"version"`       // 客户端版本
+	Hostname    string `json:"hostname"`      // 主机名
+	OS          string `json:"os"`            // 操作系统
+	Arch        string `json:"arch"`          // CPU架构
+	GoVersion   string `json:"go_version"`    // Go版本
+	NumCPU      int    `json:"num_cpu"`       // CPU核心数
+	NumGoroutine int   `json:"num_goroutine"` // Goroutine数量
+}
+
+// --- 文件操作 ---
+
+// FileReadParams file.read 命令的参数
+type FileReadParams struct {
+	Path      string `json:"path"`                 // 文件路径
+	MaxSize   int    `json:"max_size,omitempty"`   // 最大读取大小（字节）
+	Encoding  string `json:"encoding,omitempty"`   // 编码（默认utf-8）
+}
+
+// FileReadResult file.read 命令的结果
+type FileReadResult struct {
+	Path     string `json:"path"`      // 文件路径
+	Content  string `json:"content"`   // 文件内容
+	Size     int64  `json:"size"`      // 文件大小
+	Truncated bool  `json:"truncated"` // 是否被截断
+}
+
+// FileWriteParams file.write 命令的参数
+type FileWriteParams struct {
+	Path    string `json:"path"`              // 文件路径
+	Content string `json:"content"`           // 文件内容
+	Mode    string `json:"mode,omitempty"`    // 写入模式（overwrite/append）
+	Perm    string `json:"perm,omitempty"`    // 文件权限（如 "0644"）
+}
+
+// FileWriteResult file.write 命令的结果
+type FileWriteResult struct {
+	Path    string `json:"path"`    // 文件路径
+	Written int64  `json:"written"` // 写入字节数
+	Success bool   `json:"success"` // 是否成功
+}
+
+// --- 服务管理 ---
+
+// ServiceParams 服务操作命令的参数
+type ServiceParams struct {
+	Name string `json:"name"` // 服务名称
+}
+
+// ServiceResult 服务操作命令的结果
+type ServiceResult struct {
+	Name    string `json:"name"`    // 服务名称
+	Status  string `json:"status"`  // 状态（running/stopped/unknown）
+	Success bool   `json:"success"` // 操作是否成功
+	Message string `json:"message"` // 消息
+}
+
+// --- 配置管理 ---
+
+// ConfigGetParams config.get 命令的参数
+type ConfigGetParams struct {
+	Key string `json:"key"` // 配置键（空表示获取全部）
+}
+
+// ConfigUpdateParams config.update 命令的参数
+type ConfigUpdateParams struct {
+	Key   string      `json:"key"`   // 配置键
+	Value interface{} `json:"value"` // 配置值
+}
+
+// ConfigResult 配置操作的结果
+type ConfigResult struct {
+	Success bool        `json:"success"`         // 是否成功
+	Key     string      `json:"key,omitempty"`   // 配置键
+	Value   interface{} `json:"value,omitempty"` // 配置值
+	Message string      `json:"message"`         // 消息
+}
+
+// ============================================================================
+// 以下是原有的命令状态和管理结构
+// ============================================================================
+
 // CommandStatus 命令执行状态
 type CommandStatus string
 

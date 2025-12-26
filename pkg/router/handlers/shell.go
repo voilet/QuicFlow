@@ -9,23 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 )
-
-// ShellParams exec_shell命令的参数
-type ShellParams struct {
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"` // 超时时间（秒），默认30秒
-}
-
-// ShellResult exec_shell命令的结果
-type ShellResult struct {
-	Success  bool   `json:"success"`
-	ExitCode int    `json:"exit_code"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	Message  string `json:"message"`
-}
 
 // ShellHandler Shell命令处理器
 type ShellHandler struct {
@@ -47,7 +33,7 @@ func NewShellHandler(logger *monitoring.Logger) *ShellHandler {
 
 // Handle 处理exec_shell命令
 func (h *ShellHandler) Handle(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
-	var params ShellParams
+	var params command.ShellParams
 	if err := json.Unmarshal(payload, &params); err != nil {
 		return nil, fmt.Errorf("invalid exec_shell params: %w", err)
 	}
@@ -75,6 +61,11 @@ func (h *ShellHandler) Handle(ctx context.Context, payload json.RawMessage) (jso
 	// 执行Shell命令
 	cmd := exec.CommandContext(execCtx, "sh", "-c", params.Command)
 
+	// 设置工作目录（如果指定）
+	if params.WorkDir != "" {
+		cmd.Dir = params.WorkDir
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -85,8 +76,8 @@ func (h *ShellHandler) Handle(ctx context.Context, payload json.RawMessage) (jso
 	stdoutStr := h.truncateOutput(stdout.String())
 	stderrStr := h.truncateOutput(stderr.String())
 
-	// 构建结果
-	result := ShellResult{
+	// 构建结果（使用共享类型）
+	result := command.ShellResult{
 		Success:  err == nil,
 		ExitCode: 0,
 		Stdout:   stdoutStr,

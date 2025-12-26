@@ -41,7 +41,8 @@ func NewLogger(level LogLevel, format string) *Logger {
 	}
 
 	opts := &slog.HandlerOptions{
-		Level: slogLevel,
+		Level:     slogLevel,
+		AddSource: true, // 添加源文件和行号
 	}
 
 	var handler slog.Handler

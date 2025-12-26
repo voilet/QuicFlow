@@ -8,10 +8,14 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/router"
 	"github.com/voilet/quic-flow/pkg/router/handlers"
 )
+
+// 客户端版本号
+const ClientVersion = "1.0.0"
 
 // SetupClientRouter 设置客户端路由器
 // 用于处理来自 Server 的命令
@@ -25,34 +29,35 @@ func SetupClientRouter(logger *monitoring.Logger) *router.Router {
 	r.Use(router.LoggingMiddleware(logger))  // 日志记录
 
 	// ========================================
-	// 注册内置处理器
+	// 注册内置处理器（统一注册保证一致性）
 	// ========================================
 	handlers.RegisterBuiltinHandlers(r, &handlers.Config{
 		Logger:  logger,
-		Version: "1.0.0",
+		Version: ClientVersion,
 	})
 
 	// ========================================
 	// 注册自定义命令处理器
+	// 使用 command.CmdXxx 常量保持 Server/Client 一致
 	// ========================================
 
 	// ping - 简单的存活检测
-	r.Register("ping", handlePing)
+	r.Register(command.CmdPing, handlePing)
 
 	// echo - 回显命令
-	r.Register("echo", handleEcho)
+	r.Register(command.CmdEcho, handleEcho)
 
 	// system.info - 获取系统信息
-	r.Register("system.info", handleSystemInfo)
+	r.Register(command.CmdSystemInfo, handleSystemInfo)
 
 	// system.env - 获取环境变量
 	r.Register("system.env", handleGetEnv)
 
-	// file.read - 读取文件（示例）
-	r.Register("file.read", handleFileRead)
+	// file.read - 读取文件
+	r.Register(command.CmdFileRead, handleFileRead)
 
-	// config.update - 更新配置（示例）
-	r.Register("config.update", handleConfigUpdate)
+	// config.update - 更新配置
+	r.Register(command.CmdConfigUpdate, handleConfigUpdate)
 
 	logger.Info("✅ Client router initialized", "commands", r.ListCommands())
 

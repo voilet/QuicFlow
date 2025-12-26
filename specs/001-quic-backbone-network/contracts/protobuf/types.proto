@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package quic.backbone.v1;
 
-option go_package = "github.com/voilet/QuicFlow/pkg/protocol;protocol";
+option go_package = "github.com/voilet/quic-flow/pkg/protocol;protocol";
 
 // 客户端信息
 message ClientInfo {
