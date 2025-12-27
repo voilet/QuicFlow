@@ -1,13 +1,8 @@
 {
-  "name": "QUIC Flow Dev",
+  "name": "QUIC Flow Dev (CentOS 7.9)",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
-  },
-  "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
-    }
   },
   "customizations": {
     "vscode": {
