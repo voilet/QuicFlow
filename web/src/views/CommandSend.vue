@@ -104,6 +104,7 @@
                 type="primary"
                 @click="submitCommand"
                 :loading="submitting"
+                :disabled="clientIdsList.length === 0"
                 :icon="VideoPlay"
                 style="width: 100%"
               >
