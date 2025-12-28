@@ -30,6 +30,13 @@ func RegisterBuiltinHandlers(r *router.Router, cfg *Config) {
 	// 注册内置处理器（简洁的函数式风格）
 	r.Register(command.CmdExecShell, ExecShell)
 	r.Register(command.CmdGetStatus, GetStatus)
+
+	// 网络相关处理器
+	r.Register(command.CmdNetworkInterfaces, GetNetworkInterfaces)
+	r.Register(command.CmdNetworkSpeed, GetNetworkSpeed)
+
+	// 硬件信息处理器
+	r.Register(command.CmdHardwareInfo, GetHardwareInfo)
 }
 
 // ============================================================================
@@ -37,11 +44,14 @@ func RegisterBuiltinHandlers(r *router.Router, cfg *Config) {
 // ============================================================================
 
 const (
-	CmdExecShell  = command.CmdExecShell
-	CmdGetStatus  = command.CmdGetStatus
-	CmdSystemInfo = command.CmdSystemInfo
-	CmdFileRead   = command.CmdFileRead
-	CmdFileWrite  = command.CmdFileWrite
-	CmdPing       = command.CmdPing
-	CmdEcho       = command.CmdEcho
+	CmdExecShell         = command.CmdExecShell
+	CmdGetStatus         = command.CmdGetStatus
+	CmdSystemInfo        = command.CmdSystemInfo
+	CmdFileRead          = command.CmdFileRead
+	CmdFileWrite         = command.CmdFileWrite
+	CmdPing              = command.CmdPing
+	CmdEcho              = command.CmdEcho
+	CmdNetworkInterfaces = command.CmdNetworkInterfaces
+	CmdNetworkSpeed      = command.CmdNetworkSpeed
+	CmdHardwareInfo      = command.CmdHardwareInfo
 )

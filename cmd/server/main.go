@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/api"
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
@@ -17,36 +17,75 @@ import (
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/router"
 	"github.com/voilet/quic-flow/pkg/transport/server"
+	"github.com/voilet/quic-flow/pkg/version"
 )
 
-func main() {
+var (
 	// 命令行参数
-	addr := flag.String("addr", ":8474", "服务器监听地址")
-	cert := flag.String("cert", "certs/server-cert.pem", "TLS 证书文件路径")
-	key := flag.String("key", "certs/server-key.pem", "TLS 私钥文件路径")
-	apiAddr := flag.String("api", ":8475", "HTTP API 监听地址")
-	flag.Parse()
+	addr    string
+	cert    string
+	key     string
+	apiAddr string
+)
 
+// rootCmd 根命令
+var rootCmd = &cobra.Command{
+	Use:   "quic-server",
+	Short: "QUIC Backbone Server",
+	Long:  "QUIC Backbone Server - 高性能 QUIC 协议服务器",
+	Run:   runServer,
+}
+
+// versionCmd 版本信息子命令
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "显示版本信息",
+	Long:  "显示服务器版本号、Git 提交、编译时间等信息",
+	Run: func(cmd *cobra.Command, args []string) {
+		version.Print("quic-server")
+	},
+}
+
+func init() {
+	// 定义命令行参数
+	rootCmd.Flags().StringVarP(&addr, "addr", "a", ":8474", "服务器监听地址")
+	rootCmd.Flags().StringVarP(&cert, "cert", "c", "certs/server-cert.pem", "TLS 证书文件路径")
+	rootCmd.Flags().StringVarP(&key, "key", "k", "certs/server-key.pem", "TLS 私钥文件路径")
+	rootCmd.Flags().StringVarP(&apiAddr, "api", "p", ":8475", "HTTP API 监听地址")
+
+	// 添加子命令
+	rootCmd.AddCommand(versionCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func runServer(cmd *cobra.Command, args []string) {
 	// 创建日志器
 	logger := monitoring.NewLogger(monitoring.LogLevelInfo, "text")
 
 	logger.Info("=== QUIC Backbone Server ===")
-	logger.Info("Starting server", "addr", *addr)
+	logger.Info("Version", "version", version.String())
+	logger.Info("Starting server", "addr", addr)
 
 	// 创建服务器配置
-	config := server.NewDefaultServerConfig(*cert, *key, *addr)
+	config := server.NewDefaultServerConfig(cert, key, addr)
 	config.Logger = logger
 
 	// 设置事件钩子
 	config.Hooks = &monitoring.EventHooks{
 		OnConnect: func(clientID string) {
-			logger.Info("✅ Client connected", "client_id", clientID)
+			logger.Info("Client connected", "client_id", clientID)
 		},
 		OnDisconnect: func(clientID string, reason error) {
-			logger.Info("❌ Client disconnected", "client_id", clientID, "reason", reason)
+			logger.Info("Client disconnected", "client_id", clientID, "reason", reason)
 		},
 		OnHeartbeatTimeout: func(clientID string) {
-			logger.Warn("💔 Heartbeat timeout", "client_id", clientID)
+			logger.Warn("Heartbeat timeout", "client_id", clientID)
 		},
 	}
 
@@ -57,42 +96,37 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ========================================
-	// 设置消息路由器（zinx风格）
-	// 路由注册在 router.go 中
-	// ========================================
+	// 设置消息路由器
 	msgRouter := SetupServerRouter(logger)
 
-	// ========================================
 	// 创建 Dispatcher 并注册消息处理器
-	// ========================================
 	disp := setupServerDispatcher(logger, msgRouter)
 
 	// 设置 Dispatcher 到服务器
 	srv.SetDispatcher(disp)
-	logger.Info("✅ Dispatcher attached to server")
+	logger.Info("Dispatcher attached to server")
 
 	// 启动服务器
-	if err := srv.Start(*addr); err != nil {
+	if err := srv.Start(addr); err != nil {
 		logger.Error("Failed to start server", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("✅ Server started successfully")
+	logger.Info("Server started successfully")
 
 	// 创建命令管理器
 	commandManager := command.NewCommandManager(srv, logger)
-	logger.Info("✅ Command manager created")
+	logger.Info("Command manager created")
 
 	// 启动 HTTP API 服务器
-	httpServer := api.NewHTTPServer(*apiAddr, srv, commandManager, logger)
+	httpServer := api.NewHTTPServer(apiAddr, srv, commandManager, logger)
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("✅ HTTP API server started", "addr", *apiAddr)
-	logger.Info("✅ Command system enabled")
+	logger.Info("HTTP API server started", "addr", apiAddr)
+	logger.Info("Command system enabled")
 	logger.Info("Press Ctrl+C to stop")
 
 	// 定期打印统计信息
@@ -147,22 +181,16 @@ func setupServerDispatcher(logger *monitoring.Logger, msgRouter *router.Router) 
 	}
 
 	// 注册消息类型处理器
-	// MESSAGE_TYPE_EVENT: 客户端主动发送的事件消息
 	disp.RegisterHandler(protocol.MessageType_MESSAGE_TYPE_EVENT, dispatcher.MessageHandlerFunc(routeHandler))
-
-	// MESSAGE_TYPE_QUERY: 客户端查询消息
 	disp.RegisterHandler(protocol.MessageType_MESSAGE_TYPE_QUERY, dispatcher.MessageHandlerFunc(routeHandler))
-
-	// MESSAGE_TYPE_RESPONSE: 客户端对命令的响应
 	disp.RegisterHandler(protocol.MessageType_MESSAGE_TYPE_RESPONSE, dispatcher.MessageHandlerFunc(func(ctx context.Context, msg *protocol.DataMessage) (*protocol.DataMessage, error) {
 		logger.Info("Received response from client", "msg_id", msg.MsgId, "sender", msg.SenderId)
-		// 响应消息通常由Promise处理，这里只做日志记录
 		return nil, nil
 	}))
 
 	// 启动 Dispatcher
 	disp.Start()
-	logger.Info("✅ Dispatcher started")
+	logger.Info("Dispatcher started")
 
 	return disp
 }

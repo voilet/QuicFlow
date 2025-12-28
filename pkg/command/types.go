@@ -35,12 +35,17 @@ const (
 	CmdConfigUpdate = "config.update" // 更新配置
 
 	// 网络诊断
-	CmdNetworkPing  = "network.ping"  // Ping 测试
-	CmdNetworkTrace = "network.trace" // 路由追踪
+	CmdNetworkPing       = "network.ping"       // Ping 测试
+	CmdNetworkTrace      = "network.trace"      // 路由追踪
+	CmdNetworkInterfaces = "network.interfaces" // 获取物理网卡列表
+	CmdNetworkSpeed      = "network.speed"      // 获取网卡协商速率
 
 	// 通用
 	CmdPing = "ping" // 简单存活检测
 	CmdEcho = "echo" // 回显测试
+
+	// 硬件信息
+	CmdHardwareInfo = "hardware.info" // 获取完整硬件信息
 )
 
 // ============================================================================
@@ -258,4 +263,175 @@ type MultiCommandResponse struct {
 	FailedCount  int                    `json:"failed_count"`  // 发送失败的数量
 	Results      []*ClientCommandResult `json:"results"`       // 各客户端的结果
 	Message      string                 `json:"message"`       // 摘要信息
+}
+
+// ============================================================================
+// 网络接口相关结构
+// ============================================================================
+
+// NetworkInterfacesParams network.interfaces 命令的参数
+type NetworkInterfacesParams struct {
+	PhysicalOnly bool `json:"physical_only,omitempty"` // 是否只返回物理网卡（默认true）
+}
+
+// NetworkInterface 单个网卡信息
+type NetworkInterface struct {
+	Name         string   `json:"name"`                    // 接口名称（如 eth0, ens33）
+	Index        int      `json:"index"`                   // 接口索引
+	HardwareAddr string   `json:"hardware_addr,omitempty"` // MAC 地址
+	MTU          int      `json:"mtu"`                     // MTU 大小
+	Flags        []string `json:"flags"`                   // 接口标志（up, broadcast, multicast等）
+	Addresses    []string `json:"addresses,omitempty"`     // IP 地址列表
+	IsPhysical   bool     `json:"is_physical"`             // 是否为物理网卡
+	IsUp         bool     `json:"is_up"`                   // 接口是否启用
+	Driver       string   `json:"driver,omitempty"`        // 驱动名称
+	Speed        int      `json:"speed,omitempty"`         // 协商速率（Mbps），-1表示未知
+	Duplex       string   `json:"duplex,omitempty"`        // 双工模式（full/half/unknown）
+	LinkDetected bool     `json:"link_detected"`           // 是否检测到链路
+}
+
+// NetworkInterfacesResult network.interfaces 命令的结果
+type NetworkInterfacesResult struct {
+	Interfaces []NetworkInterface `json:"interfaces"` // 网卡列表
+	Count      int                `json:"count"`      // 网卡数量
+}
+
+// NetworkSpeedParams network.speed 命令的参数
+type NetworkSpeedParams struct {
+	InterfaceName string `json:"interface_name,omitempty"` // 指定接口名称，为空则返回所有
+}
+
+// NetworkSpeedInfo 单个网卡速率信息
+type NetworkSpeedInfo struct {
+	Name         string `json:"name"`          // 接口名称
+	Speed        int    `json:"speed"`         // 协商速率（Mbps），-1表示未知
+	Duplex       string `json:"duplex"`        // 双工模式（full/half/unknown）
+	LinkDetected bool   `json:"link_detected"` // 是否检测到链路
+	AutoNeg      bool   `json:"auto_neg"`      // 是否自动协商
+	Driver       string `json:"driver"`        // 驱动名称
+	BusInfo      string `json:"bus_info"`      // 总线信息（如 PCI 地址）
+}
+
+// NetworkSpeedResult network.speed 命令的结果
+type NetworkSpeedResult struct {
+	Interfaces []NetworkSpeedInfo `json:"interfaces"` // 网卡速率列表
+	Count      int                `json:"count"`      // 网卡数量
+}
+
+// ============================================================================
+// 硬件信息相关结构
+// ============================================================================
+
+// DMIInfo DMI/SMBIOS 信息
+type DMIInfo struct {
+	Uevent          string `json:"uevent,omitempty"`
+	BiosDate        string `json:"bios_date,omitempty"`
+	Modalias        string `json:"modalias,omitempty"`
+	BoardName       string `json:"board_name,omitempty"`
+	SysVendor       string `json:"sys_vendor,omitempty"`
+	BiosVendor      string `json:"bios_vendor,omitempty"`
+	BiosVersion     string `json:"bios_version,omitempty"`
+	BoardSerial     string `json:"board_serial,omitempty"`
+	BoardVendor     string `json:"board_vendor,omitempty"`
+	ChassisType     string `json:"chassis_type,omitempty"`
+	ProductName     string `json:"product_name,omitempty"`
+	ProductUUID     string `json:"product_uuid,omitempty"`
+	BoardVersion    string `json:"board_version,omitempty"`
+	BoardAssetTag   string `json:"board_asset_tag,omitempty"`
+	ChassisSerial   string `json:"chassis_serial,omitempty"`
+	ChassisVendor   string `json:"chassis_vendor,omitempty"`
+	ProductSerial   string `json:"product_serial,omitempty"`
+	ChassisVersion  string `json:"chassis_version,omitempty"`
+	ProductVersion  string `json:"product_version,omitempty"`
+	ChassisAssetTag string `json:"chassis_asset_tag,omitempty"`
+}
+
+// HostInfo 主机信息
+type HostInfo struct {
+	OS                   string `json:"os"`
+	Procs                uint64 `json:"procs"`
+	HostID               string `json:"host_id"`
+	Uptime               uint64 `json:"uptime"`
+	BootTime             uint64 `json:"boot_time"`
+	Hostname             string `json:"hostname"`
+	Platform             string `json:"platform"`
+	KernelArch           string `json:"kernel_arch"`
+	KernelVersion        string `json:"kernel_version"`
+	PlatformFamily       string `json:"platform_family"`
+	PlatformVersion      string `json:"platform_version"`
+	VirtualizationRole   string `json:"virtualization_role"`
+	VirtualizationSystem string `json:"virtualization_system"`
+}
+
+// DiskMountUsage 磁盘挂载点使用情况
+type DiskMountUsage struct {
+	MountPoint  string  `json:"mount_point"`
+	UsedPercent float64 `json:"used_percent"`
+}
+
+// DiskInfo 单个磁盘信息
+type DiskInfo struct {
+	Kind             string           `json:"kind"`                        // HDD/SSD/NVMe
+	Type             string           `json:"type"`                        // disk/partition
+	Model            string           `json:"model"`                       // 磁盘型号
+	Device           string           `json:"device"`                      // 设备名（如 sda, sdb）
+	IsSystemDisk     bool             `json:"is_system_disk"`              // 是否为系统盘
+	SizeRoundedTB    float64          `json:"size_rounded_tb"`             // 容量（TiB，二进制计算 1TiB=1024^4）
+	SizeTBDecimal    float64          `json:"size_tb_decimal"`             // 容量（TB，十进制计算 1TB=1000^4，厂商标注）
+	SizeRoundedBytes uint64           `json:"size_rounded_bytes"`          // 容量（字节）
+	MountUsages      []DiskMountUsage `json:"mount_usages,omitempty"`      // 挂载点使用情况
+}
+
+// MemoryModule 单个内存条信息
+type MemoryModule struct {
+	Size         string `json:"size"`          // 容量（如 "16384 MB"）
+	Type         string `json:"type"`          // 类型（如 RAM, DDR4）
+	Locator      string `json:"locator"`       // 插槽位置（如 DIMM 0）
+	AssetTag     string `json:"asset_tag"`     // 资产标签
+	PartNumber   string `json:"part_number"`   // 部件号
+	Manufacturer string `json:"manufacturer"`  // 制造商
+	SerialNumber string `json:"serial_number"` // 序列号
+}
+
+// MemoryInfo 内存信息
+type MemoryInfo struct {
+	Count          int            `json:"count"`            // 内存条数量
+	Speed          string         `json:"speed"`            // 内存速度
+	Modules        []MemoryModule `json:"modules"`          // 内存条列表
+	TotalGB        float64        `json:"total_gb"`         // 总容量（GB）
+	TotalBytes     uint64         `json:"total_bytes"`      // 总容量（字节）
+	TotalGBRounded int            `json:"total_gb_rounded"` // 总容量（GB，四舍五入）
+}
+
+// NICInfo 网卡信息
+type NICInfo struct {
+	IPv6       string `json:"ipv6,omitempty"`    // IPv6 地址
+	Name       string `json:"name"`              // 网卡名称
+	Speed      string `json:"speed"`             // 协商速率
+	Status     string `json:"status"`            // 状态（up/down）
+	IPAddress  string `json:"ip_address"`        // IPv4 地址
+	IsPhysical bool   `json:"is_physical"`       // 是否为物理网卡
+	MACAddress string `json:"mac_address"`       // MAC 地址
+}
+
+// HardwareInfoResult hardware.info 命令的完整结果
+type HardwareInfoResult struct {
+	DMI                        DMIInfo    `json:"dmi"`                           // DMI/SMBIOS 信息
+	MAC                        string     `json:"mac"`                           // 主 MAC 地址（无分隔符）
+	Host                       HostInfo   `json:"host"`                          // 主机信息
+	ModelName                  string     `json:"model_name"`                    // CPU 型号
+	Disks                      []DiskInfo `json:"disks"`                         // 磁盘列表
+	Memory                     MemoryInfo `json:"memory"`                        // 内存信息
+	NatID                      string     `json:"nat_id,omitempty"`              // NAT ID
+	NatType                    string     `json:"nat_type,omitempty"`            // NAT 类型
+	NICInfos                   []NICInfo  `json:"nic_infos"`                     // 网卡信息列表
+	CPUCoreCount               int        `json:"cpu_core_count"`                // CPU 物理核心数
+	CPUThreadCount             int        `json:"cpu_thread_count"`              // CPU 线程数
+	TotalDiskCapacityTB        float64    `json:"total_disk_capacity_tb"`        // 总磁盘容量（TiB，二进制计算）
+	TotalDiskCapacityTBDecimal float64    `json:"total_disk_capacity_tb_decimal"`// 总磁盘容量（TB，十进制计算，厂商标注）
+	LogicalCPUFrequencyMHz     float64    `json:"logical_cpu_frequency_mhz"`     // 逻辑 CPU 频率（MHz）
+	TotalDiskCapacityBytes     uint64     `json:"total_disk_capacity_bytes"`     // 总磁盘容量（字节）
+	PhysicalCPUFrequencyMHz    float64    `json:"physical_cpu_frequency_mhz"`    // 物理 CPU 频率（MHz）
+	SiblingsNum                string     `json:"siblings_num"`                  // 每个物理 CPU 的逻辑处理器数
+	NumCPUKernel               int        `json:"num_cpu_kernel"`                // 内核报告的 CPU 数量
 }

@@ -1,4 +1,4 @@
-.PHONY: all build test proto-gen lint clean install-tools help
+.PHONY: all build build-linux-amd64 test proto-gen lint clean install-tools help
 
 # Variables
 BINARY_NAME=quic-backbone
@@ -15,16 +15,36 @@ BUILD_DIR=bin
 PROTO_DIR=pkg/protocol
 PROTO_SRC_DIR=specs/001-quic-backbone-network/contracts/protobuf
 
+# Version info (injected at compile time)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
+VERSION_PKG = github.com/voilet/quic-flow/pkg/version
+LDFLAGS = -X $(VERSION_PKG).Version=$(VERSION) \
+          -X $(VERSION_PKG).GitCommit=$(GIT_COMMIT) \
+          -X $(VERSION_PKG).BuildTime=$(BUILD_TIME)
+
 all: lint test build
 
 ## build: Build server, client, and CLI binaries
 build:
 	@echo "Building binaries..."
+	@echo "Version: $(VERSION), Commit: $(GIT_COMMIT), Time: $(BUILD_TIME)"
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_SERVER) ./cmd/server
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_CLIENT) ./cmd/client
-	$(GO) build -o $(BUILD_DIR)/$(BINARY_CTL) ./cmd/ctl
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_SERVER) ./cmd/server
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_CLIENT) ./cmd/client
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_CTL) ./cmd/ctl
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_SERVER), $(BUILD_DIR)/$(BINARY_CLIENT), $(BUILD_DIR)/$(BINARY_CTL)"
+
+## build-linux-amd64: Build for Linux x86_64
+build-linux-amd64:
+	@echo "Building for Linux x86_64..."
+	@echo "Version: $(VERSION), Commit: $(GIT_COMMIT), Time: $(BUILD_TIME)"
+	@mkdir -p $(BUILD_DIR)/linux-amd64
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_SERVER) ./cmd/server
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_CLIENT) ./cmd/client
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_CTL) ./cmd/ctl
+	@echo "Build complete: $(BUILD_DIR)/linux-amd64/"
 
 ## test: Run tests
 test:

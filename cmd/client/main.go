@@ -2,49 +2,105 @@ package main
 
 import (
 	"context"
-	"flag"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/router"
+	"github.com/voilet/quic-flow/pkg/router/handlers"
 	"github.com/voilet/quic-flow/pkg/transport/client"
+	"github.com/voilet/quic-flow/pkg/version"
 )
 
-func main() {
-	// 命令行参数
-	serverAddr := flag.String("server", "localhost:8474", "服务器地址")
-	clientID := flag.String("id", "client-001", "客户端 ID")
-	insecure := flag.Bool("insecure", true, "跳过 TLS 证书验证（仅开发环境）")
-	flag.Parse()
+var (
+	// 全局参数
+	serverAddr string
+	clientID   string
+	insecure   bool
 
+	// hwinfo 参数
+	hwinfoFormat string
+)
+
+// rootCmd 根命令
+var rootCmd = &cobra.Command{
+	Use:   "quic-client",
+	Short: "QUIC Backbone Client",
+	Long:  "QUIC Backbone Client - 高性能 QUIC 协议客户端",
+	Run:   runClient,
+}
+
+// hwinfoCmd 硬件信息子命令
+var hwinfoCmd = &cobra.Command{
+	Use:   "hwinfo",
+	Short: "获取本机硬件信息",
+	Long:  "获取本机硬件信息，包括 CPU、内存、磁盘、网卡、DMI 等",
+	Run:   runHwinfo,
+}
+
+// versionCmd 版本信息子命令
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "显示版本信息",
+	Long:  "显示客户端版本号、Git 提交、编译时间等信息",
+	Run: func(cmd *cobra.Command, args []string) {
+		version.Print("quic-client")
+	},
+}
+
+func init() {
+	// 根命令参数
+	rootCmd.PersistentFlags().StringVarP(&serverAddr, "server", "s", "localhost:8474", "服务器地址")
+	rootCmd.PersistentFlags().StringVarP(&clientID, "id", "i", "client-001", "客户端 ID")
+	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", true, "跳过 TLS 证书验证（仅开发环境）")
+
+	// hwinfo 子命令参数
+	hwinfoCmd.Flags().StringVarP(&hwinfoFormat, "format", "f", "json", "输出格式 (json|text)")
+
+	// 添加子命令
+	rootCmd.AddCommand(hwinfoCmd)
+	rootCmd.AddCommand(versionCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// runClient 运行客户端（连接服务器模式）
+func runClient(cmd *cobra.Command, args []string) {
 	// 创建日志器
 	logger := monitoring.NewLogger(monitoring.LogLevelInfo, "text")
 
 	logger.Info("=== QUIC Backbone Client ===")
-	logger.Info("Connecting to server", "server", *serverAddr, "client_id", *clientID)
+	logger.Info("Version", "version", version.String())
+	logger.Info("Connecting to server", "server", serverAddr, "client_id", clientID)
 
 	// 创建客户端配置
-	config := client.NewDefaultClientConfig(*clientID)
-	config.InsecureSkipVerify = *insecure
+	config := client.NewDefaultClientConfig(clientID)
+	config.InsecureSkipVerify = insecure
 	config.Logger = logger
 
 	// 设置事件钩子
 	config.Hooks = &monitoring.EventHooks{
 		OnConnect: func(clientID string) {
-			logger.Info("✅ Connected to server", "client_id", clientID)
+			logger.Info("Connected to server", "client_id", clientID)
 		},
 		OnDisconnect: func(clientID string, reason error) {
-			logger.Warn("❌ Disconnected from server", "client_id", clientID, "reason", reason)
+			logger.Warn("Disconnected from server", "client_id", clientID, "reason", reason)
 		},
 		OnReconnect: func(clientID string, attemptCount int) {
-			logger.Info("🔄 Reconnected to server", "client_id", clientID, "attempts", attemptCount)
+			logger.Info("Reconnected to server", "client_id", clientID, "attempts", attemptCount)
 		},
 	}
 
@@ -55,29 +111,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ========================================
-	// 设置命令路由器（zinx风格）
-	// 路由注册在 router.go 中
-	// ========================================
+	// 设置命令路由器
 	cmdRouter := SetupClientRouter(logger)
 
-	// ========================================
 	// 创建 Dispatcher 并注册消息处理器
-	// ========================================
 	disp := setupDispatcher(logger, c, cmdRouter)
 
-	// 设置 Dispatcher 到客户端（必须在连接之前设置）
+	// 设置 Dispatcher 到客户端
 	c.SetDispatcher(disp)
-	logger.Info("✅ Dispatcher attached to client")
+	logger.Info("Dispatcher attached to client")
 
 	// 连接到服务器
-	if err := c.Connect(*serverAddr); err != nil {
+	if err := c.Connect(serverAddr); err != nil {
 		logger.Error("Failed to connect", "error", err)
-		// 不退出，因为启用了自动重连
 	}
 
 	logger.Info("Client started (auto-reconnect enabled)")
-	logger.Info("🎯 Ready to receive and execute commands")
+	logger.Info("Ready to receive and execute commands")
 	logger.Info("Press Ctrl+C to stop")
 
 	// 定期打印状态
@@ -92,6 +142,120 @@ func main() {
 	shutdown(logger, disp, c)
 }
 
+// runHwinfo 运行硬件信息获取（本地模式）
+func runHwinfo(cmd *cobra.Command, args []string) {
+	ctx := context.Background()
+
+	// 调用硬件信息获取函数
+	result, err := handlers.GetHardwareInfo(ctx, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "获取硬件信息失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	if hwinfoFormat == "text" {
+		// 文本格式输出
+		var hwInfo command.HardwareInfoResult
+		if err := json.Unmarshal(result, &hwInfo); err != nil {
+			fmt.Fprintf(os.Stderr, "解析硬件信息失败: %v\n", err)
+			os.Exit(1)
+		}
+		printHwinfoText(&hwInfo)
+	} else {
+		// JSON 格式输出（美化）
+		var prettyJSON map[string]interface{}
+		json.Unmarshal(result, &prettyJSON)
+		output, _ := json.MarshalIndent(prettyJSON, "", "  ")
+		fmt.Println(string(output))
+	}
+}
+
+// printHwinfoText 以文本格式打印硬件信息
+func printHwinfoText(info *command.HardwareInfoResult) {
+	fmt.Println("================== 硬件信息 ==================")
+	fmt.Println()
+
+	// 主机信息
+	fmt.Println("【主机信息】")
+	fmt.Printf("  主机名:     %s\n", info.Host.Hostname)
+	fmt.Printf("  操作系统:   %s\n", info.Host.OS)
+	fmt.Printf("  平台:       %s %s\n", info.Host.Platform, info.Host.PlatformVersion)
+	fmt.Printf("  内核版本:   %s\n", info.Host.KernelVersion)
+	fmt.Printf("  架构:       %s\n", info.Host.KernelArch)
+	fmt.Printf("  运行时间:   %s\n", formatUptime(info.Host.Uptime))
+	fmt.Printf("  主机ID:     %s\n", info.Host.HostID)
+	if info.Host.VirtualizationSystem != "" {
+		fmt.Printf("  虚拟化:     %s (%s)\n", info.Host.VirtualizationSystem, info.Host.VirtualizationRole)
+	}
+	fmt.Println()
+
+	// CPU 信息
+	fmt.Println("【CPU 信息】")
+	fmt.Printf("  型号:       %s\n", info.ModelName)
+	fmt.Printf("  物理核心:   %d\n", info.CPUCoreCount)
+	fmt.Printf("  逻辑处理器: %d\n", info.CPUThreadCount)
+	if info.PhysicalCPUFrequencyMHz > 0 {
+		fmt.Printf("  频率:       %.0f MHz\n", info.PhysicalCPUFrequencyMHz)
+	}
+	fmt.Println()
+
+	// 内存信息
+	fmt.Println("【内存信息】")
+	fmt.Printf("  总容量:     %d GB\n", info.Memory.TotalGBRounded)
+	if info.Memory.Count > 0 {
+		fmt.Printf("  内存条数:   %d\n", info.Memory.Count)
+	}
+	fmt.Println()
+
+	// 磁盘信息
+	fmt.Println("【磁盘信息】")
+	fmt.Printf("  总容量:     %.2f TB\n", info.TotalDiskCapacityTB)
+	for _, disk := range info.Disks {
+		sizeStr := fmt.Sprintf("%.0f GB", float64(disk.SizeRoundedBytes)/1024/1024/1024)
+		if disk.SizeRoundedTB >= 1 {
+			sizeStr = fmt.Sprintf("%.2f TB", disk.SizeRoundedTB)
+		}
+		sysFlag := ""
+		if disk.IsSystemDisk {
+			sysFlag = " [系统盘]"
+		}
+		fmt.Printf("  - %s: %s %s (%s)%s\n", disk.Device, disk.Model, sizeStr, disk.Kind, sysFlag)
+	}
+	fmt.Println()
+
+	// 网卡信息
+	fmt.Println("【网卡信息】")
+	fmt.Printf("  主MAC:      %s\n", info.MAC)
+	for _, nic := range info.NICInfos {
+		fmt.Printf("  - %s: %s (IP: %s, 状态: %s)\n", nic.Name, nic.MACAddress, nic.IPAddress, nic.Status)
+	}
+	fmt.Println()
+
+	// DMI 信息
+	fmt.Println("【DMI/BIOS 信息】")
+	fmt.Printf("  系统厂商:   %s\n", info.DMI.SysVendor)
+	fmt.Printf("  产品名称:   %s\n", info.DMI.ProductName)
+	fmt.Printf("  产品UUID:   %s\n", info.DMI.ProductUUID)
+	fmt.Printf("  BIOS厂商:   %s\n", info.DMI.BiosVendor)
+	fmt.Printf("  BIOS版本:   %s\n", info.DMI.BiosVersion)
+	fmt.Println()
+	fmt.Println("================================================")
+}
+
+// formatUptime 格式化运行时间
+func formatUptime(seconds uint64) string {
+	days := seconds / 86400
+	hours := (seconds % 86400) / 3600
+	minutes := (seconds % 3600) / 60
+
+	if days > 0 {
+		return fmt.Sprintf("%d天 %d小时 %d分钟", days, hours, minutes)
+	} else if hours > 0 {
+		return fmt.Sprintf("%d小时 %d分钟", hours, minutes)
+	}
+	return fmt.Sprintf("%d分钟", minutes)
+}
+
 // setupDispatcher 设置消息分发器
 func setupDispatcher(logger *monitoring.Logger, c *client.Client, cmdRouter *router.Router) *dispatcher.Dispatcher {
 	dispatcherConfig := &dispatcher.DispatcherConfig{
@@ -102,26 +266,23 @@ func setupDispatcher(logger *monitoring.Logger, c *client.Client, cmdRouter *rou
 	}
 	disp := dispatcher.NewDispatcher(dispatcherConfig)
 
-	// 创建命令处理器（使用路由器作为执行器）
+	// 创建命令处理器
 	commandHandler := command.NewCommandHandler(c, cmdRouter, logger)
 
 	// 注册 MESSAGE_TYPE_COMMAND 处理器
-	// Server 下发的命令会被路由到对应的处理函数
 	disp.RegisterHandler(protocol.MessageType_MESSAGE_TYPE_COMMAND, dispatcher.MessageHandlerFunc(func(ctx context.Context, msg *protocol.DataMessage) (*protocol.DataMessage, error) {
 		return commandHandler.HandleCommand(ctx, msg)
 	}))
 
-	// 可以注册其他消息类型的处理器
-	// 例如：处理 Server 推送的事件
+	// 处理 Server 推送的事件
 	disp.RegisterHandler(protocol.MessageType_MESSAGE_TYPE_EVENT, dispatcher.MessageHandlerFunc(func(ctx context.Context, msg *protocol.DataMessage) (*protocol.DataMessage, error) {
 		logger.Info("Received event from server", "msg_id", msg.MsgId)
-		// TODO: 处理事件逻辑
 		return nil, nil
 	}))
 
 	// 启动 Dispatcher
 	disp.Start()
-	logger.Info("✅ Dispatcher started with command handler")
+	logger.Info("Dispatcher started with command handler")
 
 	return disp
 }
