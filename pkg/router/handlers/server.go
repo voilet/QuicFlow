@@ -143,7 +143,7 @@ func (h *CommandResultHandler) Handle(ctx context.Context, payload json.RawMessa
 	if h.onResult != nil {
 		var err error
 		if result.Error != "" {
-			err = fmt.Errorf(result.Error)
+			err = fmt.Errorf("%s", result.Error)
 		}
 		h.onResult(result.CommandID, result.Result, err)
 	}

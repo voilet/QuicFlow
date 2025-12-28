@@ -19,8 +19,8 @@ request.interceptors.response.use(
 // API 接口
 export const api = {
   // 客户端管理
-  getClients() {
-    return request.get('/clients')
+  getClients(params = {}) {
+    return request.get('/clients', { params })
   },
 
   getClient(clientId) {
@@ -41,9 +41,84 @@ export const api = {
     return request.post('/command', data)
   },
 
-  // 多播命令（同时发送到多个客户端）
+  // 多播命令（同时发送到多个客户端）- 等待所有完成
   sendMultiCommand(data) {
     return request.post('/command/multi', data)
+  },
+
+  /**
+   * 流式多播命令 (SSE) - 实时返回结果
+   * @param {Object} data - 请求数据 {client_ids, command_type, payload, timeout}
+   * @param {Function} onResult - 收到单个结果时的回调 (result) => {}
+   * @param {Function} onComplete - 全部完成时的回调 (summary) => {}
+   * @param {Function} onError - 发生错误时的回调 (error) => {}
+   * @returns {EventSource} - 返回 EventSource 实例，可调用 .close() 取消
+   */
+  sendStreamCommand(data, onResult, onComplete, onError) {
+    // 使用 fetch + ReadableStream 实现 SSE (因为需要 POST)
+    const controller = new AbortController()
+
+    fetch('/api/command/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+      signal: controller.signal,
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      function processStream() {
+        return reader.read().then(({ done, value }) => {
+          if (done) {
+            return
+          }
+
+          buffer += decoder.decode(value, { stream: true })
+
+          // 解析 SSE 格式: "data: {...}\n\n"
+          const lines = buffer.split('\n\n')
+          buffer = lines.pop() // 保留未完成的部分
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const eventData = JSON.parse(line.slice(6))
+
+                if (eventData.type === 'result' && onResult) {
+                  onResult(eventData.result)
+                } else if (eventData.type === 'complete' && onComplete) {
+                  onComplete(eventData.summary)
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE event:', e, line)
+              }
+            }
+          }
+
+          return processStream()
+        })
+      }
+
+      return processStream()
+    })
+    .catch(error => {
+      if (error.name !== 'AbortError' && onError) {
+        onError(error)
+      }
+    })
+
+    // 返回一个可以取消的对象
+    return {
+      close: () => controller.abort()
+    }
   },
 
   getCommand(commandId) {

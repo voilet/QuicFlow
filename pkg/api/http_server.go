@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,11 +12,14 @@ import (
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
+	"github.com/voilet/quic-flow/pkg/session"
 )
 
 // ServerAPI 定义服务器需要提供的接口
 type ServerAPI interface {
 	ListClients() []string
+	ListClientsWithDetails() []session.ClientInfoBrief
+	ListClientsWithDetailsPaginated(offset, limit int) ([]session.ClientInfoBrief, int64)
 	GetClientInfo(clientID string) (*protocol.ClientInfo, error)
 	SendTo(clientID string, msg *protocol.DataMessage) error
 	Broadcast(msg *protocol.DataMessage) (int, []error)
@@ -123,36 +127,69 @@ type ClientDetail struct {
 
 // ListClientsResponse 客户端列表响应
 type ListClientsResponse struct {
-	Total   int            `json:"total"`
+	Total   int64          `json:"total"`
+	Offset  int            `json:"offset,omitempty"`
+	Limit   int            `json:"limit,omitempty"`
 	Clients []ClientDetail `json:"clients"`
 }
 
 // handleListClients 处理获取客户端列表请求
+// 支持分页: ?offset=0&limit=100
 func (h *HTTPServer) handleListClients(c *gin.Context) {
-	clients := h.serverAPI.ListClients()
+	// 解析分页参数
+	offset := 0
+	limit := 0 // 0 表示全部
 
-	// 获取详细信息
-	details := make([]ClientDetail, 0, len(clients))
-	for _, clientID := range clients {
-		info, err := h.serverAPI.GetClientInfo(clientID)
-		if err != nil {
-			h.logger.Warn("Failed to get client info", "client_id", clientID, "error", err)
-			continue
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
+			offset = v
 		}
-
-		uptime := time.Since(time.UnixMilli(info.ConnectedAt))
-		details = append(details, ClientDetail{
-			ClientID:    info.ClientId,
-			RemoteAddr:  info.RemoteAddr,
-			ConnectedAt: info.ConnectedAt,
-			Uptime:      uptime.Round(time.Second).String(),
-		})
 	}
 
-	c.JSON(http.StatusOK, ListClientsResponse{
-		Total:   len(details),
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	// 使用优化的一次遍历方法获取客户端详情
+	var clients []session.ClientInfoBrief
+	var total int64
+
+	if limit > 0 {
+		// 分页查询
+		clients, total = h.serverAPI.ListClientsWithDetailsPaginated(offset, limit)
+	} else {
+		// 全量查询
+		clients = h.serverAPI.ListClientsWithDetails()
+		total = int64(len(clients))
+	}
+
+	// 转换为响应格式（添加 uptime 计算）
+	now := time.Now()
+	details := make([]ClientDetail, len(clients))
+	for i, client := range clients {
+		uptime := now.Sub(time.UnixMilli(client.ConnectedAt))
+		details[i] = ClientDetail{
+			ClientID:    client.ClientID,
+			RemoteAddr:  client.RemoteAddr,
+			ConnectedAt: client.ConnectedAt,
+			Uptime:      uptime.Round(time.Second).String(),
+		}
+	}
+
+	response := ListClientsResponse{
+		Total:   total,
 		Clients: details,
-	})
+	}
+
+	// 只在分页时返回分页信息
+	if limit > 0 {
+		response.Offset = offset
+		response.Limit = limit
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // handleGetClient 处理获取单个客户端信息请求

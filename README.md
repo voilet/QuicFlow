@@ -54,14 +54,21 @@ make build
 ### Run the Server
 
 ```bash
-# Basic server
+# 使用默认配置启动（自动搜索 config/server.yaml）
 ./bin/quic-server
 
-# Server with custom address
-./bin/quic-server -addr :9090
+# 使用指定配置文件启动
+./bin/quic-server -c config/server.yaml
 
-# Server with monitoring enabled
-./bin/monitoring-server -metrics :9091
+# 使用高性能配置启动（支持 10W 连接 + 5W 并发任务）
+./bin/quic-server -c config/server-highperf.yaml
+
+# 生成配置文件
+./bin/quic-server genconfig -o my-config.yaml
+./bin/quic-server genconfig --high-perf -o highperf.yaml
+
+# 查看版本信息
+./bin/quic-server version
 ```
 
 ### Run the Client
@@ -73,6 +80,101 @@ make build
 # Client with auto-reconnect
 ./bin/quic-client -server localhost:8474 -id client-002 -insecure
 ```
+
+## Load Testing Tool
+
+QUIC Flow 提供了一个专用的负载测试工具 `quic-loadtest`，用于批量启动客户端进行大规模连接测试。
+
+### 构建负载测试工具
+
+```bash
+# 仅构建 loadtest 工具
+make build-loadtest
+
+# 或构建所有工具
+make build
+```
+
+### 使用方法
+
+```bash
+# 启动 1 万个客户端连接
+./bin/quic-loadtest -s 127.0.0.1:8474 -n 10000 -c 200
+
+# 参数说明:
+#   -s, --server      服务器地址 (默认: 127.0.0.1:8474)
+#   -n, --count       客户端数量 (默认: 10000)
+#   -p, --prefix      客户端 ID 前缀 (默认: load-client)
+#   -c, --concurrency 并发连接数 (默认: 100)
+#   -k, --insecure    跳过 TLS 验证 (默认: true)
+#   --keep-alive      保持连接 (默认: true)
+#   --report-interval 状态报告间隔秒数 (默认: 5)
+#   --log-level       日志级别 debug/info/warn/error (默认: warn)
+```
+
+### 生成客户端 ID 列表
+
+```bash
+# 生成 1 万个客户端 ID 到文件
+./bin/quic-loadtest generate -n 10000 -o /tmp/clients.txt
+
+# 生成自定义前缀的 ID
+./bin/quic-loadtest generate -n 5000 -p my-client -o clients.txt
+
+# 输出到标准输出
+./bin/quic-loadtest generate -n 100 -p test
+```
+
+### 负载测试示例
+
+```bash
+# 终端 1: 启动服务器 (高性能模式)
+./bin/quic-server -c config/server-highperf.yaml
+
+# 终端 2: 启动 1 万个客户端
+./bin/quic-loadtest -s 127.0.0.1:8474 -n 10000 -c 200
+
+# 终端 3: 通过 Web 管理界面向所有客户端下发命令
+cd web && npm run dev
+# 访问 http://localhost:3000
+```
+
+## Web Management Interface
+
+QUIC Flow 包含一个基于 Vue 3 + Element Plus 的 Web 管理界面，用于客户端管理和批量命令下发。
+
+### 启动 Web 界面
+
+```bash
+cd web
+
+# 安装依赖
+npm install
+
+# 开发模式启动
+npm run dev
+
+# 生产构建
+npm run build
+```
+
+访问 `http://localhost:3000` 打开管理界面。
+
+### 功能特性
+
+- **客户端列表**: 实时显示所有连接的客户端
+- **多选批量下发**: 支持选择多个客户端批量执行命令
+- **实时结果展示**: 命令执行结果实时返回并展示
+- **流式执行 (SSE)**: 支持 SSE 流式返回，先完成的结果先显示
+- **执行统计**: 显示已发送、已返回、未执行、不在线的客户端统计
+
+### 批量命令下发
+
+1. 在「客户端列表」页面勾选目标客户端
+2. 点击「批量下发」跳转到命令下发页面
+3. 选择命令类型（Shell 命令、获取状态等）
+4. 点击「批量执行」或「流式执行 (SSE)」
+5. 查看执行结果和统计信息
 
 ## Architecture
 
@@ -119,32 +221,131 @@ make build
 
 ## Configuration
 
-### Server Configuration
+QUIC Flow 使用 YAML 配置文件管理服务器参数，基于 [Viper](https://github.com/spf13/viper) 实现。
 
-```go
-config := &server.ServerConfig{
-    TLSCertFile: "certs/server.crt",
-    TLSKeyFile:  "certs/server.key",
+### 配置文件
 
-    // QUIC settings
-    MaxIdleTimeout:     30 * time.Second,
-    MaxIncomingStreams: 1000,
+项目提供两个预设配置文件：
 
-    // Heartbeat settings
-    HeartbeatCheckInterval: 5 * time.Second,
-    HeartbeatTimeout:       45 * time.Second,
-    MaxTimeoutCount:        3,
+| 配置文件 | 模式 | 适用场景 |
+|---------|------|---------|
+| `config/server.yaml` | 标准模式 | 10K 连接，开发和小规模部署 |
+| `config/server-highperf.yaml` | 高性能模式 | 100K+ 连接，50K 并发任务 |
 
-    // Capacity limits
-    MaxClients:  10000,
-    MaxPromises: 50000,
+### 启动服务器
 
-    // Logging and monitoring
-    Logger: monitoring.NewLogger(monitoring.LogLevelInfo, "text"),
-    Hooks:  eventHooks,
-}
+```bash
+# 使用标准配置启动
+./bin/quic-server -c config/server.yaml
 
-srv, err := server.NewServer(config)
+# 使用高性能配置启动
+./bin/quic-server -c config/server-highperf.yaml
+
+# 生成默认配置文件
+./bin/quic-server genconfig -o my-config.yaml
+
+# 生成高性能配置文件
+./bin/quic-server genconfig --high-perf -o highperf-config.yaml
+```
+
+### 配置参数说明
+
+#### 标准模式 vs 高性能模式
+
+| 参数 | 标准模式 | 高性能模式 | 说明 |
+|------|---------|-----------|------|
+| `server.max_clients` | 10,000 | 150,000 | 最大客户端连接数 |
+| `message.worker_count` | 20 | 200 | Dispatcher Worker 数量 |
+| `message.task_queue_size` | 2,000 | 100,000 | 任务队列大小 |
+| `message.max_promises` | 50,000 | 150,000 | 最大 Promise 数量 |
+| `quic.max_incoming_streams` | 1,000 | 10,000 | 每连接最大并发流 |
+| `batch.enabled` | false | true | 批量执行功能 |
+| `batch.max_concurrency` | 5,000 | 5,000 | 批量执行并发数 |
+
+#### 完整配置示例
+
+```yaml
+# 服务器基础配置
+server:
+  addr: ":8474"              # QUIC 监听地址
+  api_addr: ":8475"          # HTTP API 地址
+  high_perf: false           # 高性能模式标记
+  max_clients: 10000         # 最大客户端数
+
+# TLS 配置
+tls:
+  cert_file: "certs/server-cert.pem"
+  key_file: "certs/server-key.pem"
+
+# QUIC 协议配置
+quic:
+  max_idle_timeout: 60                      # 空闲超时（秒）
+  max_incoming_streams: 1000                # 每连接最大并发流
+  max_incoming_uni_streams: 100             # 单向流数量
+  initial_stream_receive_window: 524288     # 初始流接收窗口（512KB）
+  max_stream_receive_window: 6291456        # 最大流接收窗口（6MB）
+  initial_connection_receive_window: 1048576 # 初始连接接收窗口（1MB）
+  max_connection_receive_window: 15728640   # 最大连接接收窗口（15MB）
+
+# 会话管理配置
+session:
+  heartbeat_interval: 15      # 心跳间隔（秒）
+  heartbeat_timeout: 45       # 心跳超时（秒）
+  heartbeat_check_interval: 5 # 心跳检查间隔（秒）
+  max_timeout_count: 3        # 最大超时次数
+
+# 消息处理配置
+message:
+  worker_count: 20              # Dispatcher Worker 数量
+  task_queue_size: 2000         # 任务队列大小
+  handler_timeout: 30           # 处理超时（秒）
+  max_promises: 50000           # 最大 Promise 数量
+  promise_warn_threshold: 40000 # Promise 警告阈值
+  default_message_timeout: 30   # 默认消息超时（秒）
+
+# 批量执行配置
+batch:
+  enabled: false         # 是否启用
+  max_concurrency: 5000  # 最大并发数
+  task_timeout: 60       # 单任务超时（秒）
+  job_timeout: 600       # 整体任务超时（秒）
+  max_retries: 2         # 最大重试次数
+  retry_interval: 1      # 重试间隔（秒）
+
+# 日志配置
+log:
+  level: "info"    # debug, info, warn, error
+  format: "text"   # text, json
+  file: ""         # 日志文件路径（空=stdout）
+```
+
+### 环境变量
+
+支持通过环境变量覆盖配置，前缀为 `QUIC_`：
+
+```bash
+# 示例
+export QUIC_SERVER_ADDR=":9090"
+export QUIC_SERVER_MAX_CLIENTS=50000
+export QUIC_MESSAGE_WORKER_COUNT=100
+export QUIC_LOG_LEVEL="debug"
+
+./bin/quic-server -c config/server.yaml
+```
+
+### 高性能模式系统调优
+
+使用高性能模式前，需要调优 Linux 系统参数：
+
+```bash
+# 运行系统调优脚本
+sudo ./scripts/tune-system.sh persist
+
+# 主要调整参数：
+# - 文件描述符限制: 1,000,000
+# - UDP 缓冲区: 256MB
+# - 端口范围: 10000-65535
+# - TCP/UDP 内存: 自动优化
 ```
 
 ### Client Configuration
@@ -168,6 +369,161 @@ config := &client.ClientConfig{
 
 c, err := client.NewClient(config)
 ```
+
+## HTTP API
+
+服务器提供 HTTP API 用于客户端管理和命令下发，默认监听 `:8475`。
+
+### 客户端管理
+
+```bash
+# 获取所有客户端列表
+curl http://localhost:8475/api/clients
+
+# 获取单个客户端信息
+curl http://localhost:8475/api/clients/{client_id}
+
+# 健康检查
+curl http://localhost:8475/health
+```
+
+### 命令下发
+
+```bash
+# 向单个客户端发送命令
+curl -X POST http://localhost:8475/api/command \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_id": "client-001",
+    "command_type": "exec_shell",
+    "payload": {"command": "ls -la"},
+    "timeout": 30
+  }'
+
+# 批量命令下发 (等待所有完成后返回)
+curl -X POST http://localhost:8475/api/command/multi \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_ids": ["client-001", "client-002", "client-003"],
+    "command_type": "exec_shell",
+    "payload": {"command": "hostname"},
+    "timeout": 30
+  }'
+
+# 查询命令状态
+curl http://localhost:8475/api/command/{command_id}
+
+# 命令历史列表
+curl http://localhost:8475/api/commands
+```
+
+### SSE 流式命令 (实时返回)
+
+流式命令 API 使用 Server-Sent Events (SSE) 技术，实现命令结果的实时返回。先完成的客户端结果会先推送到前端，无需等待所有客户端完成。
+
+```bash
+# 流式批量命令 (SSE)
+curl -N -X POST http://localhost:8475/api/command/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_ids": ["client-001", "client-002", "client-003"],
+    "command_type": "exec_shell",
+    "payload": {"command": "sleep 1 && hostname"},
+    "timeout": 30
+  }'
+```
+
+**SSE 事件格式:**
+
+```
+data: {"type":"result","client_id":"client-001","result":{...}}
+
+data: {"type":"result","client_id":"client-002","result":{...}}
+
+data: {"type":"complete","summary":{"total":3,"success_count":3,"failed_count":0,"duration_ms":1234}}
+```
+
+**JavaScript 调用示例:**
+
+```javascript
+// 使用 Fetch API 消费 SSE 流
+const response = await fetch('/api/command/stream', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    client_ids: ['client-001', 'client-002'],
+    command_type: 'exec_shell',
+    payload: { command: 'hostname' },
+    timeout: 30
+  })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  const text = decoder.decode(value);
+  // 解析 "data: {...}\n\n" 格式
+  const lines = text.split('\n\n');
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const event = JSON.parse(line.slice(6));
+      if (event.type === 'result') {
+        console.log('收到结果:', event.result);
+      } else if (event.type === 'complete') {
+        console.log('全部完成:', event.summary);
+      }
+    }
+  }
+}
+```
+
+### 批量执行 vs 流式执行对比
+
+| 特性 | 批量执行 (`/command/multi`) | 流式执行 (`/command/stream`) |
+|------|---------------------------|------------------------------|
+| 返回方式 | 等待所有客户端完成后返回 | 实时返回每个结果 |
+| 用户体验 | 需要等待最慢的客户端 | 先完成的先显示 |
+| 技术实现 | 标准 HTTP JSON 响应 | Server-Sent Events (SSE) |
+| 适用场景 | 少量客户端、需要统一处理 | 大量客户端、需要实时反馈 |
+
+## Batch Execution
+
+高性能模式支持批量向多个客户端发送命令：
+
+### HTTP API
+
+```bash
+# 发起批量执行
+curl -X POST http://localhost:8475/api/batch/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "system.collect_info",
+    "payload": {"type": "hardware"},
+    "target_clients": ["client-001", "client-002", "client-003"],
+    "wait_for_result": true
+  }'
+
+# 查询任务状态
+curl http://localhost:8475/api/batch/jobs/{job_id}
+
+# 列出所有任务
+curl http://localhost:8475/api/batch/jobs
+
+# 取消任务
+curl -X POST http://localhost:8475/api/batch/jobs/{job_id}/cancel
+```
+
+### 批量执行特性
+
+- **并发控制**: 最大 5000 并发发送
+- **进度追踪**: 实时查看成功/失败/待处理数量
+- **超时处理**: 单任务 60s，整体任务 30min
+- **自动重试**: 失败任务自动重试 2 次
+- **任务取消**: 支持中途取消任务
 
 ## Examples
 
@@ -286,19 +642,37 @@ hooks := &monitoring.EventHooks{
 
 ## Performance
 
+### 性能规格
+
+| 指标 | 标准模式 | 高性能模式 |
+|------|---------|-----------|
+| 最大连接数 | 10,000 | 100,000+ |
+| 并发任务数 | 2,000 | 50,000 |
+| 消息吞吐量 | 10,000+ msg/s | 100,000+ msg/s |
+| P50 延迟 | < 5ms | < 10ms |
+| P99 延迟 | < 50ms | < 100ms |
+| 每连接内存 | ~50KB | ~50KB |
+
 ### Benchmarks
 
-- **Throughput**: 10,000+ messages/second (local network)
-- **Latency**: P50 < 5ms, P99 < 50ms (local network)
-- **Scalability**: 10,000+ concurrent connections per server
-- **Memory**: ~50KB per connection
+```bash
+# 运行并发连接测试
+go test -v ./tests -run TestHighConcurrencyConnections
+
+# 运行命令发送基准测试
+go test -bench=BenchmarkCommandSend ./tests
+
+# 运行完整负载测试（需要先启动服务器）
+go test -v ./tests -run TestConcurrentCommands
+```
 
 ### Optimization Tips
 
-1. **Message Size**: Keep messages < 1MB to avoid blocking
-2. **Worker Pool**: Adjust dispatcher workers based on CPU cores
-3. **Heartbeat**: Tune intervals based on network conditions
-4. **Promise Capacity**: Monitor active promises and adjust limits
+1. **系统调优**: 高性能模式前运行 `sudo ./scripts/tune-system.sh persist`
+2. **Worker 数量**: 根据 CPU 核心数调整 `message.worker_count`
+3. **队列大小**: `task_queue_size` 应 >= 预期并发任务数 × 2
+4. **心跳间隔**: 高并发时增加间隔以减少开销
+5. **Promise 容量**: 监控活跃 Promise 数量，及时调整限制
 
 ## Testing
 
@@ -322,21 +696,42 @@ make coverage
 .
 ├── cmd/                    # Command-line programs
 │   ├── server/             # Server binary
-│   └── client/             # Client binary
+│   ├── client/             # Client binary
+│   ├── ctl/                # CLI management tool
+│   └── loadtest/           # Load testing tool (批量客户端连接)
+├── config/                 # Configuration files
+│   ├── server.yaml         # Standard mode config (10K connections)
+│   └── server-highperf.yaml # High-perf mode config (100K+ connections)
+├── web/                    # Web management interface (Vue 3 + Element Plus)
+│   ├── src/
+│   │   ├── api/            # API client (axios + SSE)
+│   │   ├── views/          # Page components
+│   │   │   ├── ClientList.vue    # 客户端列表 (多选批量下发)
+│   │   │   └── CommandSend.vue   # 命令下发 (支持 SSE 流式执行)
+│   │   └── router/         # Vue Router
+│   └── package.json
 ├── pkg/                    # Library code
+│   ├── api/                # HTTP API handlers
+│   │   ├── http_server.go  # REST API
+│   │   ├── stream_api.go   # SSE streaming API
+│   │   └── batch_api.go    # Batch execution API
+│   ├── batch/              # Batch execution engine
 │   ├── callback/           # Promise/callback mechanism
+│   ├── command/            # Command types and handlers
+│   ├── config/             # Viper configuration management
 │   ├── dispatcher/         # Message routing
 │   ├── errors/             # Error types
 │   ├── monitoring/         # Metrics and logging
 │   ├── protocol/           # Protobuf definitions
+│   ├── router/             # Command router
+│   │   └── handlers/       # Built-in command handlers
 │   ├── session/            # Session management
 │   └── transport/          # QUIC transport layer
 ├── examples/               # Example programs
-│   ├── echo/               # Echo server/client
-│   ├── broadcast/          # Broadcast example
-│   ├── callback/           # Callback example
-│   └── monitoring/         # Monitoring example
 ├── scripts/                # Build and test scripts
+│   ├── gen-certs.sh        # Generate TLS certificates
+│   └── tune-system.sh      # System tuning for high-perf
+├── tests/                  # Integration and load tests
 ├── docs/                   # Documentation
 └── certs/                  # TLS certificates
 

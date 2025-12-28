@@ -184,6 +184,61 @@ func (sm *SessionManager) ListClientIDs() []string {
 	return ids
 }
 
+// ClientInfoBrief 客户端简要信息（用于列表展示）
+type ClientInfoBrief struct {
+	ClientID    string `json:"client_id"`
+	RemoteAddr  string `json:"remote_addr"`
+	ConnectedAt int64  `json:"connected_at"`
+}
+
+// ListClientsWithDetails 获取所有客户端详情（一次遍历）
+// 比 ListClientIDs + 循环 Get 性能更好
+func (sm *SessionManager) ListClientsWithDetails() []ClientInfoBrief {
+	// 预分配容量
+	count := sm.count.Load()
+	result := make([]ClientInfoBrief, 0, count)
+
+	sm.sessions.Range(func(key, value interface{}) bool {
+		session := value.(*ClientSession)
+		result = append(result, ClientInfoBrief{
+			ClientID:    session.ClientID,
+			RemoteAddr:  session.RemoteAddr,
+			ConnectedAt: session.ConnectedAt.UnixMilli(),
+		})
+		return true
+	})
+
+	return result
+}
+
+// ListClientsWithDetailsPaginated 分页获取客户端详情
+// offset: 起始位置
+// limit: 返回数量（0 表示全部）
+// 返回: 客户端列表, 总数
+func (sm *SessionManager) ListClientsWithDetailsPaginated(offset, limit int) ([]ClientInfoBrief, int64) {
+	total := sm.count.Load()
+
+	// 如果 offset 超过总数，返回空列表
+	if int64(offset) >= total {
+		return []ClientInfoBrief{}, total
+	}
+
+	// 收集所有客户端
+	all := sm.ListClientsWithDetails()
+
+	// 应用分页
+	end := offset + limit
+	if limit == 0 || end > len(all) {
+		end = len(all)
+	}
+
+	if offset >= len(all) {
+		return []ClientInfoBrief{}, total
+	}
+
+	return all[offset:end], total
+}
+
 // heartbeatChecker 心跳检查器（独立 goroutine）
 func (sm *SessionManager) heartbeatChecker() {
 	defer sm.wg.Done()

@@ -1,10 +1,11 @@
-.PHONY: all build build-linux-amd64 test proto-gen lint clean install-tools help
+.PHONY: all build build-loadtest build-linux-amd64 test proto-gen lint clean install-tools help
 
 # Variables
 BINARY_NAME=quic-backbone
 BINARY_SERVER=quic-server
 BINARY_CLIENT=quic-client
 BINARY_CTL=quic-ctl
+BINARY_LOADTEST=quic-loadtest
 GO=go
 PROTOC=protoc
 PROTOC_GEN_GO=$(shell go env GOPATH)/bin/protoc-gen-go
@@ -26,7 +27,7 @@ LDFLAGS = -X $(VERSION_PKG).Version=$(VERSION) \
 
 all: lint test build
 
-## build: Build server, client, and CLI binaries
+## build: Build server, client, CLI, and loadtest binaries
 build:
 	@echo "Building binaries..."
 	@echo "Version: $(VERSION), Commit: $(GIT_COMMIT), Time: $(BUILD_TIME)"
@@ -34,7 +35,15 @@ build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_SERVER) ./cmd/server
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_CLIENT) ./cmd/client
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_CTL) ./cmd/ctl
-	@echo "Build complete: $(BUILD_DIR)/$(BINARY_SERVER), $(BUILD_DIR)/$(BINARY_CLIENT), $(BUILD_DIR)/$(BINARY_CTL)"
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_LOADTEST) ./cmd/loadtest
+	@echo "Build complete: $(BUILD_DIR)/"
+
+## build-loadtest: Build loadtest tool only
+build-loadtest:
+	@echo "Building loadtest tool..."
+	@mkdir -p $(BUILD_DIR)
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_LOADTEST) ./cmd/loadtest
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_LOADTEST)"
 
 ## build-linux-amd64: Build for Linux x86_64
 build-linux-amd64:
@@ -44,6 +53,7 @@ build-linux-amd64:
 	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_SERVER) ./cmd/server
 	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_CLIENT) ./cmd/client
 	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_CTL) ./cmd/ctl
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/linux-amd64/$(BINARY_LOADTEST) ./cmd/loadtest
 	@echo "Build complete: $(BUILD_DIR)/linux-amd64/"
 
 ## test: Run tests

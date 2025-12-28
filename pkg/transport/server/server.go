@@ -469,6 +469,16 @@ func (s *Server) ListClients() []string {
 	return s.sessions.ListClientIDs()
 }
 
+// ListClientsWithDetails 获取所有客户端详情（优化版，一次遍历）
+func (s *Server) ListClientsWithDetails() []session.ClientInfoBrief {
+	return s.sessions.ListClientsWithDetails()
+}
+
+// ListClientsWithDetailsPaginated 分页获取客户端详情
+func (s *Server) ListClientsWithDetailsPaginated(offset, limit int) ([]session.ClientInfoBrief, int64) {
+	return s.sessions.ListClientsWithDetailsPaginated(offset, limit)
+}
+
 // GetClientInfo 获取客户端详细信息 (T034)
 func (s *Server) GetClientInfo(clientID string) (*protocol.ClientInfo, error) {
 	sess, err := s.sessions.Get(clientID)

@@ -1,0 +1,87 @@
+# QUIC Flow Server 配置文件
+# 默认配置 - 标准模式 (1万连接)
+
+# 服务器基础配置
+server:
+  # 服务器监听地址
+  addr: ":8474"
+  # HTTP API 监听地址
+  api_addr: ":8475"
+  # 高性能模式 (10万连接+5万任务)
+  high_perf: false
+  # 最大客户端连接数
+  max_clients: 10000
+
+# TLS 配置
+tls:
+  # 证书文件路径
+  cert_file: "certs/server-cert.pem"
+  # 私钥文件路径
+  key_file: "certs/server-key.pem"
+
+# QUIC 协议配置
+quic:
+  # 空闲超时（秒）
+  max_idle_timeout: 60
+  # 每连接最大并发流数
+  max_incoming_streams: 1000
+  # 单向流数量
+  max_incoming_uni_streams: 100
+  # 初始流接收窗口（字节）- 512KB
+  initial_stream_receive_window: 524288
+  # 最大流接收窗口（字节）- 6MB
+  max_stream_receive_window: 6291456
+  # 初始连接接收窗口（字节）- 1MB
+  initial_connection_receive_window: 1048576
+  # 最大连接接收窗口（字节）- 15MB
+  max_connection_receive_window: 15728640
+
+# 会话管理配置
+session:
+  # 心跳间隔（秒）
+  heartbeat_interval: 15
+  # 心跳超时（秒）
+  heartbeat_timeout: 45
+  # 心跳检查间隔（秒）
+  heartbeat_check_interval: 5
+  # 最大超时次数
+  max_timeout_count: 3
+
+# 消息处理配置
+message:
+  # Dispatcher Worker 数量
+  worker_count: 20
+  # 任务队列大小
+  task_queue_size: 2000
+  # 处理超时（秒）
+  handler_timeout: 30
+  # 最大 Promise 数量
+  max_promises: 50000
+  # Promise 警告阈值
+  promise_warn_threshold: 40000
+  # 默认消息超时（秒）
+  default_message_timeout: 30
+
+# 批量执行配置
+batch:
+  # 是否启用批量执行
+  enabled: false
+  # 最大并发数
+  max_concurrency: 5000
+  # 单任务超时（秒）
+  task_timeout: 60
+  # 整体任务超时（秒）
+  job_timeout: 600
+  # 最大重试次数
+  max_retries: 2
+  # 重试间隔（秒）
+  retry_interval: 1
+
+# 日志配置
+log:
+  # 日志级别: debug, info, warn, error
+  level: "info"
+  # 日志格式: text, json
+  format: "text"
+  # 日志文件路径（空表示输出到 stdout）
+  file: ""

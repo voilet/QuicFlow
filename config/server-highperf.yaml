@@ -1,0 +1,90 @@
+# QUIC Flow Server 配置文件
+# 高性能模式 - 支持 10万连接 + 5万并发任务
+#
+# 使用前请确保系统已调优：
+#   sudo ./scripts/tune-system.sh persist
+
+# 服务器基础配置
+server:
+  # 服务器监听地址
+  addr: ":8474"
+  # HTTP API 监听地址
+  api_addr: ":8475"
+  # 高性能模式
+  high_perf: true
+  # 最大客户端连接数 (10万 * 1.5 安全边界)
+  max_clients: 150000
+
+# TLS 配置
+tls:
+  # 证书文件路径
+  cert_file: "certs/server-cert.pem"
+  # 私钥文件路径
+  key_file: "certs/server-key.pem"
+
+# QUIC 协议配置 (高性能优化)
+quic:
+  # 空闲超时（秒）- 增加以减少重连
+  max_idle_timeout: 120
+  # 每连接最大并发流数 - 大幅增加
+  max_incoming_streams: 10000
+  # 单向流数量
+  max_incoming_uni_streams: 1000
+  # 初始流接收窗口（字节）- 1MB
+  initial_stream_receive_window: 1048576
+  # 最大流接收窗口（字节）- 16MB
+  max_stream_receive_window: 16777216
+  # 初始连接接收窗口（字节）- 2MB
+  initial_connection_receive_window: 2097152
+  # 最大连接接收窗口（字节）- 32MB
+  max_connection_receive_window: 33554432
+
+# 会话管理配置 (减少心跳开销)
+session:
+  # 心跳间隔（秒）- 增加以减少开销
+  heartbeat_interval: 30
+  # 心跳超时（秒）
+  heartbeat_timeout: 90
+  # 心跳检查间隔（秒）
+  heartbeat_check_interval: 10
+  # 最大超时次数
+  max_timeout_count: 3
+
+# 消息处理配置 (高吞吐量)
+message:
+  # Dispatcher Worker 数量 - 大幅增加
+  worker_count: 200
+  # 任务队列大小 - 支持 5万并发 * 2
+  task_queue_size: 100000
+  # 处理超时（秒）
+  handler_timeout: 60
+  # 最大 Promise 数量 - 5万 * 3
+  max_promises: 150000
+  # Promise 警告阈值
+  promise_warn_threshold: 120000
+  # 默认消息超时（秒）
+  default_message_timeout: 60
+
+# 批量执行配置 (启用)
+batch:
+  # 是否启用批量执行
+  enabled: true
+  # 最大并发数 - 5000 并发发送
+  max_concurrency: 5000
+  # 单任务超时（秒）
+  task_timeout: 60
+  # 整体任务超时（秒）- 30分钟
+  job_timeout: 1800
+  # 最大重试次数
+  max_retries: 2
+  # 重试间隔（秒）
+  retry_interval: 1
+
+# 日志配置
+log:
+  # 日志级别: debug, info, warn, error
+  level: "info"
+  # 日志格式: text, json
+  format: "text"
+  # 日志文件路径（空表示输出到 stdout）
+  file: ""

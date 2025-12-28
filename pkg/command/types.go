@@ -46,6 +46,9 @@ const (
 
 	// 硬件信息
 	CmdHardwareInfo = "hardware.info" // 获取完整硬件信息
+
+	// 磁盘测试
+	CmdDiskBenchmark = "disk.benchmark" // 磁盘 IO 读写测试
 )
 
 // ============================================================================
@@ -434,4 +437,66 @@ type HardwareInfoResult struct {
 	PhysicalCPUFrequencyMHz    float64    `json:"physical_cpu_frequency_mhz"`    // 物理 CPU 频率（MHz）
 	SiblingsNum                string     `json:"siblings_num"`                  // 每个物理 CPU 的逻辑处理器数
 	NumCPUKernel               int        `json:"num_cpu_kernel"`                // 内核报告的 CPU 数量
+}
+
+// ============================================================================
+// 磁盘 IO 测试相关结构
+// ============================================================================
+
+// DiskBenchmarkParams disk.benchmark 命令的参数
+type DiskBenchmarkParams struct {
+	Device     string `json:"device,omitempty"`     // 指定设备名（如 nvme0n1），为空则测试所有非系统盘
+	TestSize   string `json:"test_size,omitempty"`  // 测试文件大小（默认 1G）
+	Runtime    int    `json:"runtime,omitempty"`    // 每项测试运行时间秒（默认 30）
+	BlockSize  string `json:"block_size,omitempty"` // 块大小（默认 4k）
+	NumJobs    int    `json:"numjobs,omitempty"`    // 并发任务数（默认 1）
+	IODepth    int    `json:"iodepth,omitempty"`    // IO 队列深度（默认 32）
+	Concurrent bool   `json:"concurrent,omitempty"` // 是否并发测试多块磁盘（默认 false，顺序测试）
+}
+
+// DiskBenchmarkResult 单个磁盘的测试结果
+type DiskBenchmarkResult struct {
+	Device string `json:"device"` // 设备名
+	Model  string `json:"model"`  // 磁盘型号
+	Kind   string `json:"kind"`   // 磁盘类型（HDD/SSD/NVMe）
+
+	// 顺序读
+	SeqReadIOPS       float64 `json:"seq_read_iops"`        // 顺序读 IOPS
+	SeqReadBWMBps     float64 `json:"seq_read_bw_mbps"`     // 顺序读带宽 MB/s
+	SeqReadLatencyUs  float64 `json:"seq_read_latency_us"`  // 顺序读平均延迟 μs
+
+	// 顺序写
+	SeqWriteIOPS      float64 `json:"seq_write_iops"`       // 顺序写 IOPS
+	SeqWriteBWMBps    float64 `json:"seq_write_bw_mbps"`    // 顺序写带宽 MB/s
+	SeqWriteLatencyUs float64 `json:"seq_write_latency_us"` // 顺序写平均延迟 μs
+
+	// 随机读 4K
+	RandReadIOPS      float64 `json:"rand_read_iops"`       // 随机读 IOPS
+	RandReadBWMBps    float64 `json:"rand_read_bw_mbps"`    // 随机读带宽 MB/s
+	RandReadLatencyUs float64 `json:"rand_read_latency_us"` // 随机读平均延迟 μs
+
+	// 随机写 4K
+	RandWriteIOPS      float64 `json:"rand_write_iops"`       // 随机写 IOPS
+	RandWriteBWMBps    float64 `json:"rand_write_bw_mbps"`    // 随机写带宽 MB/s
+	RandWriteLatencyUs float64 `json:"rand_write_latency_us"` // 随机写平均延迟 μs
+
+	// 混合随机读写 (70% 读 30% 写)
+	MixedIOPS      float64 `json:"mixed_iops"`       // 混合 IOPS
+	MixedBWMBps    float64 `json:"mixed_bw_mbps"`    // 混合带宽 MB/s
+	MixedLatencyUs float64 `json:"mixed_latency_us"` // 混合平均延迟 μs
+
+	// 测试信息
+	TestPath  string `json:"test_path"`  // 测试路径
+	TestSize  string `json:"test_size"`  // 测试大小
+	Duration  int    `json:"duration"`   // 测试总耗时（秒）
+	Error     string `json:"error,omitempty"` // 错误信息
+}
+
+// DiskBenchmarkResponse disk.benchmark 命令的完整响应
+type DiskBenchmarkResponse struct {
+	Success    bool                   `json:"success"`     // 是否成功
+	Results    []*DiskBenchmarkResult `json:"results"`     // 各磁盘测试结果
+	TotalDisks int                    `json:"total_disks"` // 测试磁盘总数
+	TestedAt   string                 `json:"tested_at"`   // 测试时间
+	Message    string                 `json:"message,omitempty"` // 消息
 }

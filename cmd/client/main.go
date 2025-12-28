@@ -28,6 +28,13 @@ var (
 
 	// hwinfo 参数
 	hwinfoFormat string
+
+	// diskbench 参数
+	benchDevice     string
+	benchTestSize   string
+	benchRuntime    int
+	benchFormat     string
+	benchConcurrent bool
 )
 
 // rootCmd 根命令
@@ -56,6 +63,14 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+// diskbenchCmd 磁盘基准测试子命令
+var diskbenchCmd = &cobra.Command{
+	Use:   "diskbench",
+	Short: "执行磁盘 IO 读写测试",
+	Long:  "使用 FIO 对非系统盘进行 IO 读写性能测试，包括顺序读写、随机读写等",
+	Run:   runDiskbench,
+}
+
 func init() {
 	// 根命令参数
 	rootCmd.PersistentFlags().StringVarP(&serverAddr, "server", "s", "localhost:8474", "服务器地址")
@@ -65,9 +80,17 @@ func init() {
 	// hwinfo 子命令参数
 	hwinfoCmd.Flags().StringVarP(&hwinfoFormat, "format", "f", "json", "输出格式 (json|text)")
 
+	// diskbench 子命令参数
+	diskbenchCmd.Flags().StringVarP(&benchDevice, "device", "d", "", "指定测试设备（如 nvme0n1），为空则测试所有非系统盘")
+	diskbenchCmd.Flags().StringVarP(&benchTestSize, "size", "S", "1G", "测试文件大小（如 1G, 512M）")
+	diskbenchCmd.Flags().IntVarP(&benchRuntime, "runtime", "t", 60, "每项测试运行时间（秒）")
+	diskbenchCmd.Flags().StringVarP(&benchFormat, "format", "f", "text", "输出格式 (json|text)")
+	diskbenchCmd.Flags().BoolVarP(&benchConcurrent, "concurrent", "c", false, "并发测试多块磁盘（默认顺序测试）")
+
 	// 添加子命令
 	rootCmd.AddCommand(hwinfoCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(diskbenchCmd)
 }
 
 func main() {
@@ -167,6 +190,55 @@ func runHwinfo(cmd *cobra.Command, args []string) {
 		json.Unmarshal(result, &prettyJSON)
 		output, _ := json.MarshalIndent(prettyJSON, "", "  ")
 		fmt.Println(string(output))
+	}
+}
+
+// runDiskbench 运行磁盘基准测试（本地模式）
+func runDiskbench(cmd *cobra.Command, args []string) {
+	fmt.Println("================== 磁盘 IO 性能测试 ==================")
+	fmt.Println()
+	fmt.Println("正在准备测试...")
+	fmt.Printf("  测试设备: %s\n", func() string {
+		if benchDevice == "" {
+			return "所有非系统盘"
+		}
+		return benchDevice
+	}())
+	fmt.Printf("  测试大小: %s\n", benchTestSize)
+	fmt.Printf("  运行时间: %d 秒/项\n", benchRuntime)
+	fmt.Printf("  并发模式: %v\n", benchConcurrent)
+	fmt.Println()
+
+	// 执行测试
+	response, err := handlers.RunLocalBenchmark(benchDevice, benchTestSize, benchRuntime, benchConcurrent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "执行测试失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !response.Success {
+		fmt.Fprintf(os.Stderr, "测试失败: %s\n", response.Message)
+		os.Exit(1)
+	}
+
+	if benchFormat == "json" {
+		// JSON 格式输出
+		output, _ := json.MarshalIndent(response, "", "  ")
+		fmt.Println(string(output))
+	} else {
+		// 文本格式输出
+		fmt.Printf("测试完成时间: %s\n", response.TestedAt)
+		fmt.Printf("测试磁盘数量: %d\n", response.TotalDisks)
+		fmt.Println()
+
+		for i, result := range response.Results {
+			if i > 0 {
+				fmt.Println("--------------------------------------------------")
+			}
+			fmt.Println(handlers.FormatBenchmarkResult(result))
+		}
+
+		fmt.Println("====================================================")
 	}
 }
 

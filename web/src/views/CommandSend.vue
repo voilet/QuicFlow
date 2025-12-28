@@ -100,16 +100,29 @@
             </el-form-item>
 
             <el-form-item>
-              <el-button
-                type="primary"
-                @click="submitCommand"
-                :loading="submitting"
-                :disabled="clientIdsList.length === 0"
-                :icon="VideoPlay"
-                style="width: 100%"
-              >
-                {{ submitting ? '执行中...' : '批量执行' }}
-              </el-button>
+              <div class="button-group">
+                <el-button
+                  type="primary"
+                  @click="submitCommand"
+                  :loading="submitting"
+                  :disabled="clientIdsList.length === 0 || streaming"
+                  :icon="VideoPlay"
+                >
+                  {{ submitting ? '执行中...' : '批量执行' }}
+                </el-button>
+                <el-button
+                  type="success"
+                  @click="submitStreamCommand"
+                  :loading="streaming"
+                  :disabled="clientIdsList.length === 0 || submitting"
+                  :icon="Connection"
+                >
+                  {{ streaming ? '流式执行中...' : '流式执行 (SSE)' }}
+                </el-button>
+              </div>
+              <div class="button-tip">
+                <el-text type="info" size="small">流式执行：结果实时返回，先完成的先显示</el-text>
+              </div>
             </el-form-item>
           </el-form>
         </el-card>
@@ -189,6 +202,13 @@
             <div class="card-header">
               <span>执行结果</span>
               <div class="header-actions" v-if="executionResults.length > 0">
+                <el-button
+                  type="primary"
+                  link
+                  @click="toggleAllTerminals"
+                >
+                  {{ allTerminalsExpanded ? '全部收起' : '全部展开' }}
+                </el-button>
                 <el-button type="danger" link @click="clearResults">清空</el-button>
               </div>
             </div>
@@ -252,8 +272,19 @@
                         <span class="terminal-dot yellow"></span>
                         <span class="terminal-dot green"></span>
                         <span class="terminal-title">Terminal - {{ result.output.exit_code === 0 ? 'Success' : 'Error' }}</span>
+                        <span class="terminal-actions">
+                          <el-button
+                            size="small"
+                            :type="result.terminalExpanded ? 'info' : 'primary'"
+                            link
+                            @click.stop="result.terminalExpanded = !result.terminalExpanded"
+                          >
+                            {{ result.terminalExpanded ? '收起' : '展开' }}
+                            <el-icon :class="{ 'is-rotate': result.terminalExpanded }"><ArrowDown /></el-icon>
+                          </el-button>
+                        </span>
                       </div>
-                      <div class="terminal-body">
+                      <div class="terminal-body" :class="{ collapsed: !result.terminalExpanded }">
                         <!-- 标准输出 -->
                         <div v-if="result.output.stdout" class="terminal-output">
                           <pre class="terminal-text" v-html="highlightOutput(result.output.stdout)"></pre>
@@ -271,6 +302,10 @@
                           </span>
                         </div>
                       </div>
+                      <!-- 收起时显示展开提示 -->
+                      <div v-if="!result.terminalExpanded" class="terminal-expand-hint" @click="result.terminalExpanded = true">
+                        <span>点击展开查看完整输出</span>
+                      </div>
                     </div>
                   </template>
 
@@ -281,9 +316,23 @@
                       <span class="terminal-dot yellow"></span>
                       <span class="terminal-dot green"></span>
                       <span class="terminal-title">Terminal - Error</span>
+                      <span class="terminal-actions">
+                        <el-button
+                          size="small"
+                          :type="result.terminalExpanded ? 'info' : 'primary'"
+                          link
+                          @click.stop="result.terminalExpanded = !result.terminalExpanded"
+                        >
+                          {{ result.terminalExpanded ? '收起' : '展开' }}
+                          <el-icon :class="{ 'is-rotate': result.terminalExpanded }"><ArrowDown /></el-icon>
+                        </el-button>
+                      </span>
                     </div>
-                    <div class="terminal-body">
+                    <div class="terminal-body" :class="{ collapsed: !result.terminalExpanded }">
                       <pre class="terminal-text error">{{ result.error }}</pre>
+                    </div>
+                    <div v-if="!result.terminalExpanded" class="terminal-expand-hint" @click="result.terminalExpanded = true">
+                      <span>点击展开查看完整输出</span>
                     </div>
                   </div>
                 </div>
@@ -297,11 +346,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  VideoPlay, Loading,
+  VideoPlay, Loading, Connection,
   CircleCheck, CircleClose, ArrowDown
 } from '@element-plus/icons-vue'
 import api from '@/api'
@@ -311,10 +360,13 @@ const route = useRoute()
 
 const formRef = ref()
 const submitting = ref(false)
+const streaming = ref(false)  // 流式执行状态
+const streamController = ref(null)  // SSE 控制器，用于取消请求
 const shellCommand = ref('ls -la')
 const executionResults = ref([])
 const pollingTimers = ref({})
 const clientIdsText = ref('')  // 客户端ID文本，每行一个
+const allTerminalsExpanded = ref(true)  // 全局终端展开状态
 
 // 统计相关
 const sentCount = ref(0)  // 已发送的总数
@@ -427,6 +479,14 @@ function clearResults() {
   executionResults.value = []
 }
 
+// 全部展开/收起终端
+function toggleAllTerminals() {
+  allTerminalsExpanded.value = !allTerminalsExpanded.value
+  executionResults.value.forEach(result => {
+    result.terminalExpanded = allTerminalsExpanded.value
+  })
+}
+
 // 提交命令
 async function submitCommand() {
   // 验证
@@ -480,6 +540,7 @@ async function submitCommand() {
             status: r.status || 'completed',
             time: timestamp,
             expanded: true,
+            terminalExpanded: true,
             output: parseResultOutput(r.result),
             error: r.error,
             command_id: r.command_id
@@ -493,6 +554,88 @@ async function submitCommand() {
     ElMessage.error('命令执行失败: ' + (error.message || '未知错误'))
   } finally {
     submitting.value = false
+  }
+}
+
+// 流式提交命令 (SSE)
+async function submitStreamCommand() {
+  // 验证
+  if (clientIdsList.value.length === 0) {
+    ElMessage.warning('请输入至少一个客户端ID')
+    return
+  }
+
+  streaming.value = true
+  updatePayloadFromShell()
+
+  // 清空之前的结果
+  clearResults()
+
+  // 重置统计
+  clearStats()
+
+  try {
+    const payload = JSON.parse(form.payload)
+    const timestamp = dayjs().format('HH:mm:ss')
+
+    // 将所有目标客户端添加到统计
+    const targetClients = clientIdsList.value
+    sentCount.value = targetClients.length
+    pendingClients.value = new Set(targetClients)
+
+    // 使用流式 API
+    streamController.value = api.sendStreamCommand(
+      {
+        client_ids: targetClients,
+        command_type: form.command_type,
+        payload,
+        timeout: form.timeout
+      },
+      // onResult 回调 - 每个结果返回时调用
+      (result) => {
+        console.log('Stream result:', result)
+
+        // 检查是否是不在线错误
+        const offline = isOfflineError(result.error)
+        // 结果返回时，从已发送列表移除
+        markClientReturned(result.client_id, offline)
+
+        // 不在线的主机不显示在结果中
+        if (!offline) {
+          const newResult = {
+            id: `${result.client_id}-${Date.now()}`,
+            client_id: result.client_id,
+            status: result.status || 'completed',
+            time: timestamp,
+            expanded: true,
+            terminalExpanded: true,
+            output: parseResultOutput(result.result),
+            error: result.error,
+            command_id: result.command_id
+          }
+          // 实时添加结果（先返回的在前面）
+          executionResults.value = [...executionResults.value, newResult]
+        }
+      },
+      // onComplete 回调 - 全部完成时调用
+      (summary) => {
+        console.log('Stream complete:', summary)
+        streaming.value = false
+        streamController.value = null
+        ElMessage.success(`执行完成: 成功 ${summary.success_count}, 失败 ${summary.failed_count}, 耗时 ${summary.duration_ms}ms`)
+      },
+      // onError 回调 - 发生错误时调用
+      (error) => {
+        console.error('Stream error:', error)
+        streaming.value = false
+        streamController.value = null
+        ElMessage.error('流式执行失败: ' + (error.message || '未知错误'))
+      }
+    )
+  } catch (error) {
+    ElMessage.error('命令执行失败: ' + (error.message || '未知错误'))
+    streaming.value = false
+    streamController.value = null
   }
 }
 
@@ -640,9 +783,22 @@ function getStatusText(status) {
   return texts[status] || status
 }
 
+onMounted(() => {
+  // 从 URL 参数获取客户端 ID
+  if (route.query.client_ids) {
+    clientIdsText.value = route.query.client_ids
+  } else if (route.query.client_id) {
+    clientIdsText.value = route.query.client_id
+  }
+})
+
 onUnmounted(() => {
   // 清理所有轮询定时器
   Object.values(pollingTimers.value).forEach(timer => clearInterval(timer))
+  // 取消流式请求
+  if (streamController.value) {
+    streamController.value.close()
+  }
 })
 </script>
 
@@ -730,6 +886,17 @@ onUnmounted(() => {
   font-size: 12px;
   color: #909399;
   margin-left: auto;
+}
+
+/* 按钮组样式 */
+.button-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.button-tip {
+  margin-top: 8px;
 }
 
 /* 统计卡片 */
@@ -963,12 +1130,37 @@ onUnmounted(() => {
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
 }
 
+.terminal-actions {
+  margin-left: auto;
+}
+
+.terminal-actions .is-rotate {
+  transform: rotate(180deg);
+}
+
 .terminal-body {
   background: #1e1e1e;
   padding: 16px;
   min-height: 60px;
-  max-height: 400px;
-  overflow-y: auto;
+}
+
+.terminal-body.collapsed {
+  display: none;
+}
+
+.terminal-expand-hint {
+  background: #2a2a2a;
+  padding: 12px 16px;
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.terminal-expand-hint:hover {
+  background: #333;
+  color: #aaa;
 }
 
 .terminal-loading {
@@ -1074,25 +1266,6 @@ onUnmounted(() => {
 
 .terminal-box.error .terminal-body {
   background: #2a1a1a;
-}
-
-/* 滚动条样式 */
-.terminal-body::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.terminal-body::-webkit-scrollbar-thumb {
-  background: #444;
-  border-radius: 4px;
-}
-
-.terminal-body::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-.terminal-body::-webkit-scrollbar-track {
-  background: #1e1e1e;
 }
 
 /* 加载动画 */

@@ -11,7 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/api"
+	"github.com/voilet/quic-flow/pkg/batch"
 	"github.com/voilet/quic-flow/pkg/command"
+	"github.com/voilet/quic-flow/pkg/config"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
@@ -22,10 +24,9 @@ import (
 
 var (
 	// 命令行参数
-	addr    string
-	cert    string
-	key     string
-	apiAddr string
+	configFile string // 配置文件路径
+	genConfig  string // 生成配置文件路径
+	highPerf   bool   // 高性能模式（用于生成配置）
 )
 
 // rootCmd 根命令
@@ -46,15 +47,40 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+// genConfigCmd 生成配置文件子命令
+var genConfigCmd = &cobra.Command{
+	Use:   "genconfig",
+	Short: "生成配置文件",
+	Long:  "生成默认或高性能模式的配置文件",
+	Run: func(cmd *cobra.Command, args []string) {
+		if genConfig == "" {
+			genConfig = "config/server.yaml"
+		}
+
+		if err := config.GenerateDefaultConfig(genConfig, highPerf); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to generate config: %v\n", err)
+			os.Exit(1)
+		}
+
+		mode := "standard"
+		if highPerf {
+			mode = "high-performance"
+		}
+		fmt.Printf("Configuration file generated: %s (mode: %s)\n", genConfig, mode)
+	},
+}
+
 func init() {
-	// 定义命令行参数
-	rootCmd.Flags().StringVarP(&addr, "addr", "a", ":8474", "服务器监听地址")
-	rootCmd.Flags().StringVarP(&cert, "cert", "c", "certs/server-cert.pem", "TLS 证书文件路径")
-	rootCmd.Flags().StringVarP(&key, "key", "k", "certs/server-key.pem", "TLS 私钥文件路径")
-	rootCmd.Flags().StringVarP(&apiAddr, "api", "p", ":8475", "HTTP API 监听地址")
+	// 主命令参数
+	rootCmd.Flags().StringVarP(&configFile, "config", "c", "", "配置文件路径")
+
+	// 生成配置命令参数
+	genConfigCmd.Flags().StringVarP(&genConfig, "output", "o", "config/server.yaml", "输出配置文件路径")
+	genConfigCmd.Flags().BoolVar(&highPerf, "high-perf", false, "生成高性能模式配置")
 
 	// 添加子命令
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(genConfigCmd)
 }
 
 func main() {
@@ -65,32 +91,40 @@ func main() {
 }
 
 func runServer(cmd *cobra.Command, args []string) {
+	// 加载配置
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 创建日志器
-	logger := monitoring.NewLogger(monitoring.LogLevelInfo, "text")
+	logLevel := monitoring.LogLevelInfo
+	switch cfg.Log.Level {
+	case "debug":
+		logLevel = monitoring.LogLevelDebug
+	case "warn":
+		logLevel = monitoring.LogLevelWarn
+	case "error":
+		logLevel = monitoring.LogLevelError
+	}
+	logger := monitoring.NewLogger(logLevel, cfg.Log.Format)
 
 	logger.Info("=== QUIC Backbone Server ===")
 	logger.Info("Version", "version", version.String())
-	logger.Info("Starting server", "addr", addr)
+	if configFile != "" {
+		logger.Info("Config file loaded", "path", configFile)
+	}
+	logger.Info("Starting server",
+		"addr", cfg.Server.Addr,
+		"high_perf", cfg.Server.HighPerf,
+		"max_clients", cfg.Server.MaxClients)
 
 	// 创建服务器配置
-	config := server.NewDefaultServerConfig(cert, key, addr)
-	config.Logger = logger
-
-	// 设置事件钩子
-	config.Hooks = &monitoring.EventHooks{
-		OnConnect: func(clientID string) {
-			logger.Info("Client connected", "client_id", clientID)
-		},
-		OnDisconnect: func(clientID string, reason error) {
-			logger.Info("Client disconnected", "client_id", clientID, "reason", reason)
-		},
-		OnHeartbeatTimeout: func(clientID string) {
-			logger.Warn("Heartbeat timeout", "client_id", clientID)
-		},
-	}
+	serverConfig := buildServerConfig(cfg, logger)
 
 	// 创建服务器
-	srv, err := server.NewServer(config)
+	srv, err := server.NewServer(serverConfig)
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)
@@ -100,14 +134,21 @@ func runServer(cmd *cobra.Command, args []string) {
 	msgRouter := SetupServerRouter(logger)
 
 	// 创建 Dispatcher 并注册消息处理器
-	disp := setupServerDispatcher(logger, msgRouter)
+	disp := setupServerDispatcherWithConfig(logger, msgRouter,
+		cfg.Message.WorkerCount,
+		cfg.Message.TaskQueueSize,
+		cfg.GetHandlerTimeout())
+
+	logger.Info("Dispatcher created",
+		"workers", cfg.Message.WorkerCount,
+		"queue_size", cfg.Message.TaskQueueSize)
 
 	// 设置 Dispatcher 到服务器
 	srv.SetDispatcher(disp)
 	logger.Info("Dispatcher attached to server")
 
 	// 启动服务器
-	if err := srv.Start(addr); err != nil {
+	if err := srv.Start(cfg.Server.Addr); err != nil {
 		logger.Error("Failed to start server", "error", err)
 		os.Exit(1)
 	}
@@ -118,15 +159,46 @@ func runServer(cmd *cobra.Command, args []string) {
 	commandManager := command.NewCommandManager(srv, logger)
 	logger.Info("Command manager created")
 
+	// 创建批量执行器
+	var batchExecutor *batch.BatchExecutor
+	if cfg.Batch.Enabled {
+		batchConfig := &batch.BatchConfig{
+			MaxConcurrency: cfg.Batch.MaxConcurrency,
+			TaskTimeout:    cfg.GetTaskTimeout(),
+			JobTimeout:     cfg.GetJobTimeout(),
+			MaxRetries:     cfg.Batch.MaxRetries,
+			RetryInterval:  cfg.GetRetryInterval(),
+			Logger:         logger,
+			OnProgress: func(job *batch.BatchJob) {
+				progress := float64(job.SuccessCount+job.FailedCount) / float64(job.TotalCount) * 100
+				logger.Info("Batch progress", "job_id", job.ID, "progress", fmt.Sprintf("%.1f%%", progress))
+			},
+		}
+		batchExecutor = batch.NewBatchExecutor(srv, batchConfig)
+		logger.Info("Batch executor created", "max_concurrency", batchConfig.MaxConcurrency)
+	}
+
 	// 启动 HTTP API 服务器
-	httpServer := api.NewHTTPServer(apiAddr, srv, commandManager, logger)
+	httpServer := api.NewHTTPServer(cfg.Server.APIAddr, srv, commandManager, logger)
+
+	// 添加批量执行 API
+	if batchExecutor != nil {
+		httpServer.AddBatchRoutes(batchExecutor)
+	}
+
+	// 添加流式 API（SSE）
+	httpServer.AddStreamRoutes()
+
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("HTTP API server started", "addr", apiAddr)
+	logger.Info("HTTP API server started", "addr", cfg.Server.APIAddr)
 	logger.Info("Command system enabled")
+	if batchExecutor != nil {
+		logger.Info("Batch execution enabled")
+	}
 	logger.Info("Press Ctrl+C to stop")
 
 	// 定期打印统计信息
@@ -138,15 +210,66 @@ func runServer(cmd *cobra.Command, args []string) {
 	<-sigChan
 
 	// 优雅关闭
+	if batchExecutor != nil {
+		batchExecutor.Stop()
+	}
 	shutdownServer(logger, disp, httpServer, srv)
 }
 
-// setupServerDispatcher 设置服务器消息分发器
-func setupServerDispatcher(logger *monitoring.Logger, msgRouter *router.Router) *dispatcher.Dispatcher {
+// buildServerConfig 从配置文件构建服务器配置
+func buildServerConfig(cfg *config.ServerConfig, logger *monitoring.Logger) *server.ServerConfig {
+	serverConfig := &server.ServerConfig{
+		TLSCertFile: cfg.TLS.CertFile,
+		TLSKeyFile:  cfg.TLS.KeyFile,
+		ListenAddr:  cfg.Server.Addr,
+
+		// QUIC 配置
+		MaxIdleTimeout:                 cfg.GetMaxIdleTimeout(),
+		MaxIncomingStreams:             cfg.QUIC.MaxIncomingStreams,
+		MaxIncomingUniStreams:          cfg.QUIC.MaxIncomingUniStreams,
+		InitialStreamReceiveWindow:     cfg.QUIC.InitialStreamReceiveWindow,
+		MaxStreamReceiveWindow:         cfg.QUIC.MaxStreamReceiveWindow,
+		InitialConnectionReceiveWindow: cfg.QUIC.InitialConnectionReceiveWindow,
+		MaxConnectionReceiveWindow:     cfg.QUIC.MaxConnectionReceiveWindow,
+
+		// 会话管理配置
+		MaxClients:             cfg.Server.MaxClients,
+		HeartbeatInterval:      cfg.GetHeartbeatInterval(),
+		HeartbeatTimeout:       cfg.GetHeartbeatTimeout(),
+		HeartbeatCheckInterval: cfg.GetHeartbeatCheckInterval(),
+		MaxTimeoutCount:        cfg.Session.MaxTimeoutCount,
+
+		// Promise 配置
+		MaxPromises:           cfg.Message.MaxPromises,
+		PromiseWarnThreshold:  cfg.Message.PromiseWarnThreshold,
+		DefaultMessageTimeout: cfg.GetDefaultMessageTimeout(),
+
+		// 监控
+		Logger: logger,
+	}
+
+	// 设置事件钩子
+	serverConfig.Hooks = &monitoring.EventHooks{
+		OnConnect: func(clientID string) {
+			logger.Info("Client connected", "client_id", clientID)
+		},
+		OnDisconnect: func(clientID string, reason error) {
+			logger.Info("Client disconnected", "client_id", clientID, "reason", reason)
+		},
+		OnHeartbeatTimeout: func(clientID string) {
+			logger.Warn("Heartbeat timeout", "client_id", clientID)
+		},
+	}
+
+	return serverConfig
+}
+
+// setupServerDispatcherWithConfig 使用自定义配置设置服务器消息分发器
+func setupServerDispatcherWithConfig(logger *monitoring.Logger, msgRouter *router.Router, workerCount int, queueSize int, timeout time.Duration) *dispatcher.Dispatcher {
 	dispatcherConfig := &dispatcher.DispatcherConfig{
-		WorkerCount:    20,
-		TaskQueueSize:  2000,
-		HandlerTimeout: 30 * time.Second,
+		WorkerCount:    workerCount,
+		TaskQueueSize:  queueSize,
+		HandlerTimeout: timeout,
 		Logger:         logger,
 	}
 	disp := dispatcher.NewDispatcher(dispatcherConfig)

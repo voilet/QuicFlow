@@ -9,7 +9,7 @@
               <el-icon :size="30"><Connection /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ clients.length }}</div>
+              <div class="stat-value">{{ totalClients }}</div>
               <div class="stat-label">在线客户端</div>
             </div>
           </div>
@@ -63,6 +63,22 @@
           <span>客户端列表</span>
           <div class="header-actions">
             <el-button
+              type="success"
+              :icon="Position"
+              @click="batchSendCommand"
+              :disabled="selectedClients.length === 0"
+            >
+              批量下发 ({{ selectedClients.length }})
+            </el-button>
+            <el-button
+              type="warning"
+              link
+              @click="selectAllClients"
+              v-if="clients.length > 0"
+            >
+              全选
+            </el-button>
+            <el-button
               type="primary"
               :icon="Refresh"
               @click="loadClients"
@@ -75,11 +91,14 @@
       </template>
 
       <el-table
+        ref="tableRef"
         :data="clients"
         v-loading="loading"
         stripe
         style="width: 100%"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="client_id" label="客户端ID" min-width="200">
           <template #default="{ row }">
             <el-tag type="success">{{ row.client_id }}</el-tag>
@@ -109,7 +128,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" width="480" fixed="right">
           <template #default="{ row }">
             <el-button
               type="success"
@@ -120,6 +139,32 @@
             >
               硬件信息
             </el-button>
+            <el-popover
+              placement="top"
+              :width="200"
+              trigger="hover"
+            >
+              <template #reference>
+                <el-button
+                  type="warning"
+                  size="small"
+                  :icon="Odometer"
+                  @click="runDiskBenchmark(row.client_id)"
+                  :loading="benchmarkLoading[row.client_id]"
+                >
+                  磁盘测试
+                </el-button>
+              </template>
+              <div class="benchmark-options">
+                <el-switch
+                  v-model="benchmarkConcurrent"
+                  active-text="并发"
+                  inactive-text="顺序"
+                  style="margin-bottom: 8px;"
+                />
+                <div class="option-tip">{{ benchmarkConcurrent ? '同时测试所有磁盘' : '依次测试每块磁盘' }}</div>
+              </div>
+            </el-popover>
             <el-button
               type="primary"
               size="small"
@@ -139,6 +184,21 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 分页 -->
+      <div class="pagination-wrapper">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[50, 100, 200, 500]"
+          :total="totalClients"
+          :disabled="loading"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
 
       <div v-if="clients.length === 0 && !loading" class="empty-state">
         <el-empty description="暂无客户端连接" />
@@ -284,6 +344,151 @@
         <el-button type="primary" @click="copyHardwareInfo">复制JSON</el-button>
       </template>
     </el-dialog>
+
+    <!-- 磁盘测试对话框 -->
+    <el-dialog
+      v-model="benchmarkDialogVisible"
+      :title="`磁盘 IO 性能测试 - ${currentBenchmarkClientId}`"
+      width="1000px"
+      top="5vh"
+    >
+      <div v-if="benchmarkResult" class="benchmark-info">
+        <el-alert
+          :title="`测试完成时间: ${benchmarkResult.tested_at} | 测试磁盘数: ${benchmarkResult.total_disks} | 模式: ${benchmarkResult.message?.includes('concurrent') ? '并发' : '顺序'}`"
+          type="success"
+          :closable="false"
+          class="benchmark-summary"
+        />
+
+        <div v-for="(disk, index) in benchmarkResult.results" :key="index" class="disk-result">
+          <el-card shadow="never" class="info-section">
+            <template #header>
+              <div class="disk-header">
+                <span class="section-title">{{ disk.device }} - {{ disk.model }}</span>
+                <el-tag :type="disk.kind === 'NVMe' ? 'warning' : disk.kind === 'SSD' ? 'success' : 'info'">
+                  {{ disk.kind }}
+                </el-tag>
+              </div>
+            </template>
+
+            <el-row :gutter="20">
+              <!-- 顺序读写 -->
+              <el-col :span="12">
+                <div class="perf-card seq-read">
+                  <div class="perf-title">顺序读 (1M)</div>
+                  <div class="perf-metrics">
+                    <div class="metric">
+                      <span class="metric-value">{{ formatNumber(disk.seq_read_bw_mbps) }}</span>
+                      <span class="metric-unit">MB/s</span>
+                    </div>
+                    <div class="metric-secondary">
+                      <span>IOPS: {{ formatNumber(disk.seq_read_iops) }}</span>
+                      <span>延迟: {{ formatLatency(disk.seq_read_latency_us) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="12">
+                <div class="perf-card seq-write">
+                  <div class="perf-title">顺序写 (1M)</div>
+                  <div class="perf-metrics">
+                    <div class="metric">
+                      <span class="metric-value">{{ formatNumber(disk.seq_write_bw_mbps) }}</span>
+                      <span class="metric-unit">MB/s</span>
+                    </div>
+                    <div class="metric-secondary">
+                      <span>IOPS: {{ formatNumber(disk.seq_write_iops) }}</span>
+                      <span>延迟: {{ formatLatency(disk.seq_write_latency_us) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
+
+            <el-row :gutter="20" style="margin-top: 15px;">
+              <!-- 随机读写 -->
+              <el-col :span="12">
+                <div class="perf-card rand-read">
+                  <div class="perf-title">随机读 (4K)</div>
+                  <div class="perf-metrics">
+                    <div class="metric">
+                      <span class="metric-value">{{ formatNumber(disk.rand_read_iops) }}</span>
+                      <span class="metric-unit">IOPS</span>
+                    </div>
+                    <div class="metric-secondary">
+                      <span>带宽: {{ formatNumber(disk.rand_read_bw_mbps) }} MB/s</span>
+                      <span>延迟: {{ formatLatency(disk.rand_read_latency_us) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="12">
+                <div class="perf-card rand-write">
+                  <div class="perf-title">随机写 (4K)</div>
+                  <div class="perf-metrics">
+                    <div class="metric">
+                      <span class="metric-value">{{ formatNumber(disk.rand_write_iops) }}</span>
+                      <span class="metric-unit">IOPS</span>
+                    </div>
+                    <div class="metric-secondary">
+                      <span>带宽: {{ formatNumber(disk.rand_write_bw_mbps) }} MB/s</span>
+                      <span>延迟: {{ formatLatency(disk.rand_write_latency_us) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
+
+            <el-row :gutter="20" style="margin-top: 15px;">
+              <!-- 混合读写 -->
+              <el-col :span="12">
+                <div class="perf-card mixed">
+                  <div class="perf-title">混合随机读写 (70R/30W, 4K)</div>
+                  <div class="perf-metrics">
+                    <div class="metric">
+                      <span class="metric-value">{{ formatNumber(disk.mixed_iops) }}</span>
+                      <span class="metric-unit">IOPS</span>
+                    </div>
+                    <div class="metric-secondary">
+                      <span>带宽: {{ formatNumber(disk.mixed_bw_mbps) }} MB/s</span>
+                      <span>延迟: {{ formatLatency(disk.mixed_latency_us) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="12">
+                <div class="perf-card test-info">
+                  <div class="perf-title">测试信息</div>
+                  <div class="perf-metrics">
+                    <div class="info-item">
+                      <span class="info-label">测试路径:</span>
+                      <span class="info-value">{{ disk.test_path }}</span>
+                    </div>
+                    <div class="info-item">
+                      <span class="info-label">测试大小:</span>
+                      <span class="info-value">{{ disk.test_size }}</span>
+                    </div>
+                    <div class="info-item">
+                      <span class="info-label">测试耗时:</span>
+                      <span class="info-value">{{ disk.duration }} 秒</span>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
+          </el-card>
+        </div>
+      </div>
+
+      <div v-else class="benchmark-loading">
+        <el-empty description="暂无测试结果" />
+      </div>
+
+      <template #footer>
+        <el-button @click="benchmarkDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="copyBenchmarkResult">复制JSON</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -299,23 +504,39 @@ import {
   Refresh,
   DocumentAdd,
   Document,
-  Monitor
+  Monitor,
+  Odometer,
+  Position
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import dayjs from 'dayjs'
 
 const router = useRouter()
 
+const tableRef = ref()
 const clients = ref([])
 const loading = ref(false)
 const totalConnections = ref(0)
 const messagesSent = ref(0)
+const selectedClients = ref([])
+
+// 分页相关
+const currentPage = ref(1)
+const pageSize = ref(100)
+const totalClients = ref(0)
 
 // 硬件信息相关
 const hardwareDialogVisible = ref(false)
 const hardwareInfo = ref(null)
 const hardwareLoading = ref({})
 const currentClientId = ref('')
+
+// 磁盘测试相关
+const benchmarkDialogVisible = ref(false)
+const benchmarkResult = ref(null)
+const benchmarkLoading = ref({})
+const currentBenchmarkClientId = ref('')
+const benchmarkConcurrent = ref(true) // 默认并发测试
 
 // 计算平均在线时长
 const averageUptime = computed(() => {
@@ -356,15 +577,61 @@ function formatTime(timestamp) {
 async function loadClients() {
   loading.value = true
   try {
-    const res = await api.getClients()
+    const offset = (currentPage.value - 1) * pageSize.value
+    const res = await api.getClients({
+      offset: offset,
+      limit: pageSize.value
+    })
     clients.value = res.clients || []
+    totalClients.value = res.total || 0
     totalConnections.value = res.total || 0
-    ElMessage.success('刷新成功')
   } catch (error) {
     ElMessage.error('加载客户端列表失败')
   } finally {
     loading.value = false
   }
+}
+
+// 处理每页条数变化
+function handleSizeChange(size) {
+  pageSize.value = size
+  currentPage.value = 1 // 重置到第一页
+  loadClients()
+}
+
+// 处理页码变化
+function handlePageChange(page) {
+  currentPage.value = page
+  loadClients()
+}
+
+// 处理选择变化
+function handleSelectionChange(selection) {
+  selectedClients.value = selection
+}
+
+// 全选所有客户端
+function selectAllClients() {
+  if (tableRef.value) {
+    clients.value.forEach(row => {
+      tableRef.value.toggleRowSelection(row, true)
+    })
+  }
+}
+
+// 批量下发命令
+function batchSendCommand() {
+  if (selectedClients.value.length === 0) {
+    ElMessage.warning('请先选择客户端')
+    return
+  }
+
+  // 将选中的客户端 ID 传递给命令页面
+  const clientIds = selectedClients.value.map(c => c.client_id).join('\n')
+  router.push({
+    path: '/command',
+    query: { client_ids: clientIds }
+  })
 }
 
 // 下发命令
@@ -468,6 +735,100 @@ function copyHardwareInfo() {
   })
 }
 
+// 执行磁盘测试
+async function runDiskBenchmark(clientId) {
+  benchmarkLoading.value[clientId] = true
+  currentBenchmarkClientId.value = clientId
+
+  try {
+    ElMessage.info('磁盘测试已开始，预计需要几分钟时间...')
+
+    const res = await api.sendCommand({
+      client_id: clientId,
+      command_type: 'disk.benchmark',
+      payload: {
+        test_size: '1G',
+        runtime: 30,
+        concurrent: benchmarkConcurrent.value
+      },
+      timeout: 600 // 10分钟超时
+    })
+
+    if (res.success && res.command_id) {
+      // 等待命令执行完成（长时间轮询）
+      await pollBenchmarkResult(res.command_id)
+    } else {
+      ElMessage.error(res.message || '发送命令失败')
+    }
+  } catch (error) {
+    ElMessage.error('执行磁盘测试失败: ' + (error.message || '未知错误'))
+  } finally {
+    benchmarkLoading.value[clientId] = false
+  }
+}
+
+// 轮询磁盘测试结果（较长超时）
+async function pollBenchmarkResult(commandId) {
+  const maxAttempts = 600 // 最多等待10分钟
+  const interval = 1000
+
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await api.getCommand(commandId)
+
+      if (res.success && res.command) {
+        const cmd = res.command
+
+        if (cmd.status === 'completed') {
+          benchmarkResult.value = cmd.result
+          benchmarkDialogVisible.value = true
+          ElMessage.success('磁盘测试完成')
+          return
+        } else if (cmd.status === 'failed' || cmd.status === 'timeout') {
+          ElMessage.error(cmd.error || '磁盘测试失败')
+          return
+        }
+      }
+    } catch (error) {
+      // 继续轮询
+    }
+
+    await new Promise(resolve => setTimeout(resolve, interval))
+  }
+
+  ElMessage.error('磁盘测试超时')
+}
+
+// 格式化数字
+function formatNumber(num) {
+  if (num === undefined || num === null) return '-'
+  return num.toFixed(2)
+}
+
+// 格式化延迟（μs转换为合适单位）
+function formatLatency(us) {
+  if (us === undefined || us === null) return '-'
+  if (us < 1000) {
+    return us.toFixed(2) + ' μs'
+  } else if (us < 1000000) {
+    return (us / 1000).toFixed(2) + ' ms'
+  } else {
+    return (us / 1000000).toFixed(2) + ' s'
+  }
+}
+
+// 复制磁盘测试结果 JSON
+function copyBenchmarkResult() {
+  if (!benchmarkResult.value) return
+
+  const text = JSON.stringify(benchmarkResult.value, null, 2)
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success('已复制到剪贴板')
+  }).catch(() => {
+    ElMessage.error('复制失败')
+  })
+}
+
 onMounted(() => {
   loadClients()
 })
@@ -553,6 +914,13 @@ onMounted(() => {
   padding: 40px 0;
 }
 
+/* 分页样式 */
+.pagination-wrapper {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* 硬件信息对话框样式 */
 .hardware-info {
   max-height: 70vh;
@@ -579,5 +947,123 @@ onMounted(() => {
 .ipv6-text {
   font-size: 12px;
   word-break: break-all;
+}
+
+/* 磁盘测试对话框样式 */
+.benchmark-info {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.benchmark-summary {
+  margin-bottom: 15px;
+}
+
+.disk-result {
+  margin-bottom: 15px;
+}
+
+.disk-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.perf-card {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 15px;
+  height: 100%;
+}
+
+.perf-card.seq-read {
+  background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+}
+
+.perf-card.seq-write {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+}
+
+.perf-card.rand-read {
+  background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+}
+
+.perf-card.rand-write {
+  background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%);
+}
+
+.perf-card.mixed {
+  background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+}
+
+.perf-card.test-info {
+  background: linear-gradient(135deg, #eceff1 0%, #cfd8dc 100%);
+}
+
+.perf-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #606266;
+  margin-bottom: 10px;
+}
+
+.perf-metrics {
+  text-align: center;
+}
+
+.metric {
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 28px;
+  font-weight: bold;
+  color: #303133;
+}
+
+.metric-unit {
+  font-size: 14px;
+  color: #606266;
+  margin-left: 5px;
+}
+
+.metric-secondary {
+  display: flex;
+  justify-content: space-around;
+  font-size: 12px;
+  color: #909399;
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.info-label {
+  color: #606266;
+}
+
+.info-value {
+  color: #303133;
+  font-weight: 500;
+  word-break: break-all;
+  text-align: right;
+  max-width: 200px;
+}
+
+.benchmark-loading {
+  padding: 40px 0;
+}
+
+.benchmark-options {
+  text-align: center;
+}
+
+.benchmark-options .option-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 </style>

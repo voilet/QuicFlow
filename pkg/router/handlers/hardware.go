@@ -231,9 +231,18 @@ func isStandardDevicePrefix(name string) bool {
 }
 
 // getPhysicalDisks 获取设备对应的物理磁盘名列表
-// 处理 LVM、普通分区、NVMe 等情况
+// 处理 LVM、普通分区、NVMe、bcache 等情况
 func getPhysicalDisks(devName string) []string {
 	var result []string
+
+	// 处理 bcache 设备
+	if strings.HasPrefix(devName, "bcache") {
+		slaves := getBcacheBackingDevices(devName)
+		if len(slaves) > 0 {
+			return slaves
+		}
+		return result
+	}
 
 	// 处理 dm-* 设备（LVM、device-mapper）
 	if strings.HasPrefix(devName, "dm-") {
@@ -366,6 +375,50 @@ func getLVMSlaves(dmName string) []string {
 	return result
 }
 
+// getBcacheBackingDevices 获取 bcache 设备的底层物理磁盘
+// bcache 是 Linux 块设备缓存层，将 SSD 作为 HDD 的缓存
+func getBcacheBackingDevices(bcacheName string) []string {
+	var result []string
+	seen := make(map[string]bool)
+
+	// 方法1: 通过 /sys/block/bcacheN/slaves/ 获取底层设备
+	slavesPath := filepath.Join("/sys/block", bcacheName, "slaves")
+	entries, err := os.ReadDir(slavesPath)
+	if err == nil && len(entries) > 0 {
+		for _, entry := range entries {
+			slaveName := entry.Name()
+			// 获取物理磁盘名（去掉分区号）
+			physicalDisks := getPhysicalDiskFromPartition(slaveName)
+			for _, disk := range physicalDisks {
+				if !seen[disk] {
+					seen[disk] = true
+					result = append(result, disk)
+				}
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+
+	// 方法2: 通过 /sys/block/bcacheN/bcache/backing_dev_name 获取
+	backingDevPath := filepath.Join("/sys/block", bcacheName, "bcache", "backing_dev_name")
+	if data, err := os.ReadFile(backingDevPath); err == nil {
+		devName := strings.TrimSpace(string(data))
+		if devName != "" {
+			physicalDisks := getPhysicalDiskFromPartition(devName)
+			for _, disk := range physicalDisks {
+				if !seen[disk] {
+					seen[disk] = true
+					result = append(result, disk)
+				}
+			}
+		}
+	}
+
+	return result
+}
+
 // getPhysicalDiskFromPartition 从分区名获取物理磁盘名
 func getPhysicalDiskFromPartition(partName string) []string {
 	var result []string
@@ -433,7 +486,12 @@ func getDiskInfo(ctx context.Context) diskInfoResult {
 		// 跳过虚拟设备
 		if strings.HasPrefix(name, "loop") ||
 			strings.HasPrefix(name, "ram") ||
-			strings.HasPrefix(name, "dm-") {
+			strings.HasPrefix(name, "dm-") ||
+			strings.HasPrefix(name, "bcache") ||  // bcache 缓存设备
+			strings.HasPrefix(name, "md") ||      // RAID 设备
+			strings.HasPrefix(name, "drbd") ||    // DRBD 设备
+			strings.HasPrefix(name, "rbd") ||     // Ceph RBD 设备
+			strings.HasPrefix(name, "nbd") {      // 网络块设备
 			continue
 		}
 
