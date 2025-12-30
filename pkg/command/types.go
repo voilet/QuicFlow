@@ -49,6 +49,9 @@ const (
 
 	// 磁盘测试
 	CmdDiskBenchmark = "disk.benchmark" // 磁盘 IO 读写测试
+
+	// 简化的磁盘 IOPS 检测
+	CmdDiskIOPS = "disk.iops" // 简化的磁盘 IOPS 检测（只返回 Read/Write IOPS）
 )
 
 // ============================================================================
@@ -169,6 +172,7 @@ const (
 	CommandStatusCompleted CommandStatus = "completed" // 执行完成（成功）
 	CommandStatusFailed    CommandStatus = "failed"    // 执行失败
 	CommandStatusTimeout   CommandStatus = "timeout"   // 执行超时
+	CommandStatusCancelled CommandStatus = "cancelled" // 已取消
 )
 
 // Command 命令信息
@@ -260,12 +264,15 @@ type ClientCommandResult struct {
 
 // MultiCommandResponse HTTP响应结构 - 多播命令结果
 type MultiCommandResponse struct {
-	Success      bool                   `json:"success"`       // 整体是否成功（所有命令都发送成功）
-	Total        int                    `json:"total"`         // 总客户端数
-	SuccessCount int                    `json:"success_count"` // 成功发送的数量
-	FailedCount  int                    `json:"failed_count"`  // 发送失败的数量
-	Results      []*ClientCommandResult `json:"results"`       // 各客户端的结果
-	Message      string                 `json:"message"`       // 摘要信息
+	TaskID       string                 `json:"task_id,omitempty"` // 任务ID（用于取消）
+	Success      bool                   `json:"success"`            // 整体是否成功（所有命令都发送成功）
+	Total        int                    `json:"total"`              // 总客户端数
+	SuccessCount int                    `json:"success_count"`      // 成功发送的数量
+	FailedCount  int                    `json:"failed_count"`      // 发送失败的数量
+	CancelledCount int                  `json:"cancelled_count"`   // 已取消的数量
+	Results      []*ClientCommandResult `json:"results"`            // 各客户端的结果
+	Message      string                 `json:"message"`            // 摘要信息
+	Status       string                 `json:"status,omitempty"`   // 任务状态（running/completed/cancelled）
 }
 
 // ============================================================================
@@ -499,4 +506,35 @@ type DiskBenchmarkResponse struct {
 	TotalDisks int                    `json:"total_disks"` // 测试磁盘总数
 	TestedAt   string                 `json:"tested_at"`   // 测试时间
 	Message    string                 `json:"message,omitempty"` // 消息
+}
+
+// ============================================================================
+// 简化的磁盘 IOPS 检测相关结构（使用单一 FIO 命令）
+// ============================================================================
+
+// DiskIOPSParams disk.iops 命令的参数
+type DiskIOPSParams struct {
+	Device  string `json:"device,omitempty"`  // 指定设备名（如 nvme0n1），为空则测试所有非系统盘
+	Runtime int    `json:"runtime,omitempty"` // 测试运行时间秒（默认 60）
+}
+
+// DiskIOPSResult 单个磁盘的 IOPS 测试结果
+type DiskIOPSResult struct {
+	Device    string  `json:"device"`              // 设备名
+	Model     string  `json:"model"`               // 磁盘型号
+	Kind      string  `json:"kind"`                // 磁盘类型（HDD/SSD/NVMe）
+	ReadIOPS  float64 `json:"read_iops"`           // 读 IOPS
+	WriteIOPS float64 `json:"write_iops"`          // 写 IOPS
+	TestPath  string  `json:"test_path"`           // 测试路径
+	Duration  int     `json:"duration"`            // 测试耗时（秒）
+	Error     string  `json:"error,omitempty"`     // 错误信息
+}
+
+// DiskIOPSResponse disk.iops 命令的完整响应
+type DiskIOPSResponse struct {
+	Success    bool              `json:"success"`               // 是否成功
+	Results    []*DiskIOPSResult `json:"results"`               // 各磁盘测试结果
+	TotalDisks int               `json:"total_disks"`           // 测试磁盘总数
+	TestedAt   string            `json:"tested_at"`             // 测试时间
+	Message    string            `json:"message,omitempty"`     // 消息
 }

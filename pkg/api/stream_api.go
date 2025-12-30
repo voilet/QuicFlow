@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +20,8 @@ type StreamCommandRequest struct {
 
 // StreamCommandEvent SSE 事件
 type StreamCommandEvent struct {
-	Type     string                      `json:"type"` // "progress", "result", "complete"
+	Type     string                      `json:"type"` // "start", "progress", "result", "complete"
+	TaskID   string                      `json:"task_id,omitempty"` // 任务ID（用于取消）
 	ClientID string                      `json:"client_id,omitempty"`
 	Result   *command.ClientCommandResult `json:"result,omitempty"`
 	Summary  *StreamSummary              `json:"summary,omitempty"`
@@ -87,71 +87,54 @@ func (h *HTTPServer) handleStreamMultiCommand(c *gin.Context) {
 
 	startTime := time.Now()
 	total := len(req.ClientIDs)
-	var successCount, failedCount int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	// 结果通道
+	
+	// 使用 SendCommandToMultiple 来获取 task_id 并支持取消
+	// 在 goroutine 中执行，通过 channel 接收结果
 	resultChan := make(chan *command.ClientCommandResult, total)
-
-	// 并行发送命令
-	for _, clientID := range req.ClientIDs {
-		wg.Add(1)
-		go func(cid string) {
-			defer wg.Done()
-
-			result := &command.ClientCommandResult{
-				ClientID: cid,
-				Status:   command.CommandStatusPending,
-			}
-
-			cmd, err := h.commandManager.SendCommand(cid, req.CommandType, req.Payload, timeout)
-			if err != nil {
-				result.Status = command.CommandStatusFailed
-				result.Error = err.Error()
-			} else {
-				result.CommandID = cmd.CommandID
-				// 等待命令完成
-				finalCmd := h.waitForCommandResult(cmd.CommandID, timeout+5*time.Second)
-				if finalCmd != nil {
-					result.Status = finalCmd.Status
-					result.Result = finalCmd.Result
-					result.Error = finalCmd.Error
-				} else {
-					result.Status = command.CommandStatusTimeout
-					result.Error = "timeout waiting for result"
-				}
-			}
-
-			// 更新统计
-			mu.Lock()
-			if result.Status == command.CommandStatusCompleted {
-				successCount++
-			} else {
-				failedCount++
-			}
-			mu.Unlock()
-
-			// 发送到结果通道
-			resultChan <- result
-		}(clientID)
-	}
-
-	// 启动关闭通道的 goroutine
+	taskIDChan := make(chan string, 1)
+	
+	// 启动后台任务执行
 	go func() {
-		wg.Wait()
+		response := h.commandManager.SendCommandToMultiple(req.ClientIDs, req.CommandType, req.Payload, timeout)
+		
+		// 发送 task_id
+		taskIDChan <- response.TaskID
+		
+		// 将结果发送到通道
+		for _, result := range response.Results {
+			resultChan <- result
+		}
 		close(resultChan)
 	}()
 
+	// 等待并发送开始事件（包含 task_id）
+	taskID := <-taskIDChan
+	startEvent := StreamCommandEvent{
+		Type:   "start",
+		TaskID: taskID,
+	}
+	data, _ := json.Marshal(startEvent)
+	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+	flusher.Flush()
+
 	// 流式输出结果
+	var successCount, failedCount int
 	for result := range resultChan {
+		// 更新统计
+		if result.Status == command.CommandStatusCompleted {
+			successCount++
+		} else {
+			failedCount++
+		}
+
 		event := StreamCommandEvent{
 			Type:     "result",
+			TaskID:   taskID, // 每个结果也包含 task_id
 			ClientID: result.ClientID,
 			Result:   result,
 		}
 
-		data, _ := json.Marshal(event)
+		data, _ = json.Marshal(event)
 		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
 		flusher.Flush()
 	}
@@ -168,7 +151,7 @@ func (h *HTTPServer) handleStreamMultiCommand(c *gin.Context) {
 		},
 	}
 
-	data, _ := json.Marshal(completeEvent)
+	data, _ = json.Marshal(completeEvent)
 	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
 	flusher.Flush()
 

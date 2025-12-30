@@ -50,11 +50,12 @@ export const api = {
    * 流式多播命令 (SSE) - 实时返回结果
    * @param {Object} data - 请求数据 {client_ids, command_type, payload, timeout}
    * @param {Function} onResult - 收到单个结果时的回调 (result) => {}
+   * @param {Function} onStart - 任务开始时的回调 (eventData) => {}，包含 task_id
    * @param {Function} onComplete - 全部完成时的回调 (summary) => {}
    * @param {Function} onError - 发生错误时的回调 (error) => {}
-   * @returns {EventSource} - 返回 EventSource 实例，可调用 .close() 取消
+   * @returns {Object} - 返回可取消的对象，可调用 .close() 取消
    */
-  sendStreamCommand(data, onResult, onComplete, onError) {
+  sendStreamCommand(data, onResult, onStart, onComplete, onError) {
     // 使用 fetch + ReadableStream 实现 SSE (因为需要 POST)
     const controller = new AbortController()
 
@@ -92,7 +93,9 @@ export const api = {
               try {
                 const eventData = JSON.parse(line.slice(6))
 
-                if (eventData.type === 'result' && onResult) {
+                if (eventData.type === 'start' && onStart) {
+                  onStart(eventData)
+                } else if (eventData.type === 'result' && onResult) {
                   onResult(eventData.result)
                 } else if (eventData.type === 'complete' && onComplete) {
                   onComplete(eventData.summary)
@@ -127,6 +130,11 @@ export const api = {
 
   getCommands(params) {
     return request.get('/commands', { params })
+  },
+
+  // 取消多播任务
+  cancelMultiCommand(taskId) {
+    return request.post(`/command/multi/${taskId}/cancel`)
   }
 }
 

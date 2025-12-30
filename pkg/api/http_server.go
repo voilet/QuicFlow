@@ -62,7 +62,8 @@ func NewHTTPServer(addr string, serverAPI ServerAPI, commandManager *command.Com
 
 		// 命令相关接口
 		api.POST("/command", h.handleSendCommand)
-		api.POST("/command/multi", h.handleSendMultiCommand) // 多播命令
+		api.POST("/command/multi", h.handleSendMultiCommand)              // 多播命令
+		api.POST("/command/multi/:id/cancel", h.handleCancelMultiCommand) // 停止多播任务
 		api.GET("/command/:id", h.handleGetCommand)
 		api.GET("/commands", h.handleListCommands)
 	}
@@ -465,8 +466,8 @@ type ListCommandsRequest struct {
 
 // ListCommandsResponse 查询命令列表响应
 type ListCommandsResponse struct {
-	Success  bool              `json:"success"`
-	Total    int               `json:"total"`
+	Success  bool               `json:"success"`
+	Total    int                `json:"total"`
 	Commands []*command.Command `json:"commands"`
 }
 
@@ -543,4 +544,45 @@ func (h *HTTPServer) handleSendMultiCommand(c *gin.Context) {
 	)
 
 	c.JSON(http.StatusOK, response)
+}
+
+// handleCancelMultiCommand 处理停止多播任务请求
+func (h *HTTPServer) handleCancelMultiCommand(c *gin.Context) {
+	if h.commandManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Command manager not initialized",
+		})
+		return
+	}
+
+	taskID := c.Param("id")
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Task ID is required",
+		})
+		return
+	}
+
+	// 取消任务
+	err := h.commandManager.CancelMultiCommand(taskID)
+	if err != nil {
+		h.logger.Warn("Failed to cancel multi-command task",
+			"task_id", taskID,
+			"error", err,
+		)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": fmt.Sprintf("Failed to cancel task: %v", err),
+		})
+		return
+	}
+
+	h.logger.Info("Multi-command task cancelled via API",
+		"task_id", taskID,
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"task_id": taskID,
+		"message": "Task cancelled successfully",
+	})
 }

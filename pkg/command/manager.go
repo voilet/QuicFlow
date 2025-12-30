@@ -19,6 +19,17 @@ type ServerAPI interface {
 	SendToWithPromise(clientID string, msg *protocol.DataMessage, timeout time.Duration) (*callback.Promise, error)
 }
 
+// MultiCommandTask 多播任务信息
+type MultiCommandTask struct {
+	TaskID     string
+	ClientIDs  []string
+	CommandIDs []string // 已发送的命令ID列表
+	CancelFunc context.CancelFunc
+	Status     string // running/completed/cancelled
+	CreatedAt  time.Time
+	mu         sync.RWMutex
+}
+
 // CommandManager 命令管理器（服务端）
 type CommandManager struct {
 	server ServerAPI
@@ -27,6 +38,10 @@ type CommandManager struct {
 	// 命令存储
 	commands map[string]*Command // commandID -> Command
 	mu       sync.RWMutex
+
+	// 多播任务跟踪
+	multiTasks map[string]*MultiCommandTask // taskID -> MultiCommandTask
+	tasksMu    sync.RWMutex
 
 	// 清理配置
 	cleanupInterval time.Duration
@@ -46,6 +61,7 @@ func NewCommandManager(server ServerAPI, logger *monitoring.Logger) *CommandMana
 		server:          server,
 		logger:          logger,
 		commands:        make(map[string]*Command),
+		multiTasks:      make(map[string]*MultiCommandTask),
 		cleanupInterval: 5 * time.Minute,  // 每5分钟清理一次
 		maxCommandAge:   30 * time.Minute, // 保留30分钟的命令历史
 
@@ -189,7 +205,7 @@ func (cm *CommandManager) updateCommandStatus(commandID string, status CommandSt
 	}
 
 	// 如果是终态，记录完成时间
-	if status == CommandStatusCompleted || status == CommandStatusFailed || status == CommandStatusTimeout {
+	if status == CommandStatusCompleted || status == CommandStatusFailed || status == CommandStatusTimeout || status == CommandStatusCancelled {
 		now := time.Now()
 		cmd.CompletedAt = &now
 	}
@@ -259,7 +275,7 @@ func (cm *CommandManager) cleanup() {
 
 	for commandID, cmd := range cm.commands {
 		// 只清理已完成的命令
-		if cmd.Status != CommandStatusCompleted && cmd.Status != CommandStatusFailed && cmd.Status != CommandStatusTimeout {
+		if cmd.Status != CommandStatusCompleted && cmd.Status != CommandStatusFailed && cmd.Status != CommandStatusTimeout && cmd.Status != CommandStatusCancelled {
 			continue
 		}
 
@@ -288,19 +304,60 @@ func (cm *CommandManager) Stop() {
 }
 
 // SendCommandToMultiple 同时下发命令到多个客户端（多播）
-// 并行发送命令并等待所有响应
+// 并行发送命令并等待所有响应，支持取消
 func (cm *CommandManager) SendCommandToMultiple(clientIDs []string, commandType string, payload json.RawMessage, timeout time.Duration) *MultiCommandResponse {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
+
+	// 创建任务上下文和取消函数
+	taskID := uuid.New().String()
+	taskCtx, taskCancel := context.WithCancel(cm.ctx)
+
+	// 创建任务跟踪
+	task := &MultiCommandTask{
+		TaskID:     taskID,
+		ClientIDs:  clientIDs,
+		CommandIDs: make([]string, 0, len(clientIDs)),
+		CancelFunc: taskCancel,
+		Status:     "running",
+		CreatedAt:  time.Now(),
+	}
+
+	// 注册任务
+	cm.tasksMu.Lock()
+	cm.multiTasks[taskID] = task
+	cm.tasksMu.Unlock()
+
+	// 任务完成后清理
+	defer func() {
+		cm.tasksMu.Lock()
+		if t, ok := cm.multiTasks[taskID]; ok {
+			t.mu.Lock()
+			if t.Status == "running" {
+				t.Status = "completed"
+			}
+			t.mu.Unlock()
+		}
+		// 延迟删除任务（保留一段时间供查询）
+		go func() {
+			time.Sleep(5 * time.Minute)
+			cm.tasksMu.Lock()
+			delete(cm.multiTasks, taskID)
+			cm.tasksMu.Unlock()
+		}()
+		cm.tasksMu.Unlock()
+	}()
 
 	total := len(clientIDs)
 	results := make([]*ClientCommandResult, total)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	successCount := 0
+	cancelledCount := 0
 
 	cm.logger.Info("Sending command to multiple clients",
+		"task_id", taskID,
 		"client_count", total,
 		"command_type", commandType,
 		"timeout", timeout,
@@ -308,6 +365,29 @@ func (cm *CommandManager) SendCommandToMultiple(clientIDs []string, commandType 
 
 	// 并行发送命令到所有客户端
 	for i, clientID := range clientIDs {
+		// 检查是否已取消
+		select {
+		case <-taskCtx.Done():
+			cm.logger.Info("Multi-command task cancelled",
+				"task_id", taskID,
+				"sent_count", i,
+				"total", total,
+			)
+			// 标记未发送的命令为取消状态
+			for j := i; j < total; j++ {
+				results[j] = &ClientCommandResult{
+					ClientID: clientIDs[j],
+					Status:   CommandStatusCancelled,
+					Error:    "Task cancelled before sending",
+				}
+			}
+			mu.Lock()
+			cancelledCount = total - i
+			mu.Unlock()
+			goto done
+		default:
+		}
+
 		wg.Add(1)
 		go func(index int, cid string) {
 			defer wg.Done()
@@ -317,33 +397,68 @@ func (cm *CommandManager) SendCommandToMultiple(clientIDs []string, commandType 
 				Status:   CommandStatusPending,
 			}
 
+			// 再次检查是否已取消
+			select {
+			case <-taskCtx.Done():
+				result.Status = CommandStatusCancelled
+				result.Error = "Task cancelled"
+				mu.Lock()
+				results[index] = result
+				cancelledCount++
+				mu.Unlock()
+				return
+			default:
+			}
+
 			// 发送命令
 			cmd, err := cm.SendCommand(cid, commandType, payload, timeout)
 			if err != nil {
 				result.Status = CommandStatusFailed
 				result.Error = err.Error()
 				cm.logger.Error("Failed to send command to client",
+					"task_id", taskID,
 					"client_id", cid,
 					"error", err,
 				)
 			} else {
 				result.CommandID = cmd.CommandID
 
-				// 等待命令完成
-				finalCmd := cm.waitForCommandCompletion(cmd.CommandID, timeout+5*time.Second)
-				if finalCmd != nil {
-					result.Status = finalCmd.Status
-					result.Result = finalCmd.Result
-					result.Error = finalCmd.Error
+				// 记录命令ID
+				task.mu.Lock()
+				task.CommandIDs = append(task.CommandIDs, cmd.CommandID)
+				task.mu.Unlock()
 
-					if finalCmd.Status == CommandStatusCompleted {
-						mu.Lock()
-						successCount++
-						mu.Unlock()
+				// 等待命令完成（带取消检查）
+				finalCmd := cm.waitForCommandCompletionWithContext(taskCtx, cmd.CommandID, timeout+5*time.Second)
+				if finalCmd != nil {
+					// 检查是否被取消
+					select {
+					case <-taskCtx.Done():
+						result.Status = CommandStatusCancelled
+						result.Error = "Task cancelled"
+						// 更新命令状态为取消
+						cm.updateCommandStatus(cmd.CommandID, CommandStatusCancelled, nil, "Task cancelled")
+					default:
+						result.Status = finalCmd.Status
+						result.Result = finalCmd.Result
+						result.Error = finalCmd.Error
+
+						if finalCmd.Status == CommandStatusCompleted {
+							mu.Lock()
+							successCount++
+							mu.Unlock()
+						}
 					}
 				} else {
-					result.Status = CommandStatusTimeout
-					result.Error = "failed to get command result"
+					// 检查是否因为取消而返回nil
+					select {
+					case <-taskCtx.Done():
+						result.Status = CommandStatusCancelled
+						result.Error = "Task cancelled"
+					default:
+						result.Status = CommandStatusTimeout
+						result.Error = "failed to get command result"
+					}
 				}
 			}
 
@@ -353,23 +468,38 @@ func (cm *CommandManager) SendCommandToMultiple(clientIDs []string, commandType 
 		}(i, clientID)
 	}
 
-	// 等待所有命令完成
+	// 等待所有命令完成或取消
 	wg.Wait()
 
-	failedCount := total - successCount
+done:
+	failedCount := total - successCount - cancelledCount
 	response := &MultiCommandResponse{
-		Success:      failedCount == 0,
-		Total:        total,
-		SuccessCount: successCount,
-		FailedCount:  failedCount,
-		Results:      results,
-		Message:      fmt.Sprintf("Command sent to %d clients: %d succeeded, %d failed", total, successCount, failedCount),
+		TaskID:         taskID,
+		Success:        failedCount == 0 && cancelledCount == 0,
+		Total:          total,
+		SuccessCount:   successCount,
+		FailedCount:    failedCount,
+		CancelledCount: cancelledCount,
+		Results:        results,
+		Status:         task.Status,
+	}
+
+	if cancelledCount > 0 {
+		response.Message = fmt.Sprintf("Command sent to %d clients: %d succeeded, %d failed, %d cancelled", total, successCount, failedCount, cancelledCount)
+		task.mu.Lock()
+		task.Status = "cancelled"
+		task.mu.Unlock()
+		response.Status = "cancelled"
+	} else {
+		response.Message = fmt.Sprintf("Command sent to %d clients: %d succeeded, %d failed", total, successCount, failedCount)
 	}
 
 	cm.logger.Info("Multi-command completed",
+		"task_id", taskID,
 		"total", total,
 		"success", successCount,
 		"failed", failedCount,
+		"cancelled", cancelledCount,
 	)
 
 	return response
@@ -377,6 +507,11 @@ func (cm *CommandManager) SendCommandToMultiple(clientIDs []string, commandType 
 
 // waitForCommandCompletion 等待命令完成
 func (cm *CommandManager) waitForCommandCompletion(commandID string, timeout time.Duration) *Command {
+	return cm.waitForCommandCompletionWithContext(cm.ctx, commandID, timeout)
+}
+
+// waitForCommandCompletionWithContext 等待命令完成（支持context取消）
+func (cm *CommandManager) waitForCommandCompletionWithContext(ctx context.Context, commandID string, timeout time.Duration) *Command {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -391,7 +526,7 @@ func (cm *CommandManager) waitForCommandCompletion(commandID string, timeout tim
 
 			// 检查是否是终态
 			switch cmd.Status {
-			case CommandStatusCompleted, CommandStatusFailed, CommandStatusTimeout:
+			case CommandStatusCompleted, CommandStatusFailed, CommandStatusTimeout, CommandStatusCancelled:
 				return cmd
 			}
 
@@ -400,8 +535,83 @@ func (cm *CommandManager) waitForCommandCompletion(commandID string, timeout tim
 				return cmd
 			}
 
-		case <-cm.ctx.Done():
+		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+// CancelMultiCommand 取消正在执行的多播任务
+func (cm *CommandManager) CancelMultiCommand(taskID string) error {
+	cm.tasksMu.RLock()
+	task, ok := cm.multiTasks[taskID]
+	cm.tasksMu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	task.mu.Lock()
+	if task.Status != "running" {
+		task.mu.Unlock()
+		return fmt.Errorf("task is not running: %s", task.Status)
+	}
+	task.Status = "cancelled"
+	task.mu.Unlock()
+
+	// 调用取消函数
+	task.CancelFunc()
+
+	// 更新所有相关命令的状态为取消
+	task.mu.RLock()
+	commandIDs := make([]string, len(task.CommandIDs))
+	copy(commandIDs, task.CommandIDs)
+	task.mu.RUnlock()
+
+	for _, cmdID := range commandIDs {
+		cm.mu.RLock()
+		cmd, exists := cm.commands[cmdID]
+		cm.mu.RUnlock()
+
+		if exists {
+			// 只取消未完成状态的命令
+			switch cmd.Status {
+			case CommandStatusPending, CommandStatusExecuting:
+				cm.updateCommandStatus(cmdID, CommandStatusCancelled, nil, "Task cancelled")
+			}
+		}
+	}
+
+	cm.logger.Info("Multi-command task cancelled",
+		"task_id", taskID,
+		"command_count", len(commandIDs),
+	)
+
+	return nil
+}
+
+// GetMultiCommandTask 获取多播任务信息
+func (cm *CommandManager) GetMultiCommandTask(taskID string) (*MultiCommandTask, error) {
+	cm.tasksMu.RLock()
+	defer cm.tasksMu.RUnlock()
+
+	task, ok := cm.multiTasks[taskID]
+	if !ok {
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+
+	// 返回副本（手动复制字段，避免复制锁）
+	task.mu.RLock()
+	taskCopy := &MultiCommandTask{
+		TaskID:     task.TaskID,
+		ClientIDs:  make([]string, len(task.ClientIDs)),
+		CommandIDs: make([]string, len(task.CommandIDs)),
+		Status:     task.Status,
+		CreatedAt:  task.CreatedAt,
+	}
+	copy(taskCopy.ClientIDs, task.ClientIDs)
+	copy(taskCopy.CommandIDs, task.CommandIDs)
+	task.mu.RUnlock()
+
+	return taskCopy, nil
 }

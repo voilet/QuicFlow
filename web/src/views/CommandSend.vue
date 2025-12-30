@@ -35,24 +35,8 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="命令类型" prop="command_type">
-              <el-select
-                v-model="form.command_type"
-                placeholder="请选择命令类型"
-                style="width: 100%"
-                @change="onCommandTypeChange"
-              >
-                <el-option
-                  v-for="cmd in commandTypes"
-                  :key="cmd.value"
-                  :label="cmd.label"
-                  :value="cmd.value"
-                />
-              </el-select>
-            </el-form-item>
-
             <!-- Shell 命令输入 -->
-            <el-form-item v-if="form.command_type === 'exec_shell'" label="Shell命令">
+            <el-form-item label="Shell命令">
               <div class="shell-input-wrapper">
                 <div class="shell-header">
                   <span class="shell-prompt">$</span>
@@ -111,13 +95,21 @@
                   {{ submitting ? '执行中...' : '批量执行' }}
                 </el-button>
                 <el-button
+                  v-if="!streaming"
                   type="success"
                   @click="submitStreamCommand"
-                  :loading="streaming"
                   :disabled="clientIdsList.length === 0 || submitting"
                   :icon="Connection"
                 >
-                  {{ streaming ? '流式执行中...' : '流式执行 (SSE)' }}
+                  流式执行 (SSE)
+                </el-button>
+                <el-button
+                  v-else
+                  type="danger"
+                  @click="handleCancelStream"
+                  :icon="CircleClose"
+                >
+                  中止任务
                 </el-button>
               </div>
               <div class="button-tip">
@@ -286,13 +278,16 @@
                       </div>
                       <div class="terminal-body" :class="{ collapsed: !result.terminalExpanded }">
                         <!-- 标准输出 -->
-                        <div v-if="result.output.stdout" class="terminal-output">
+                        <div v-if="result.output && result.output.stdout !== undefined && result.output.stdout !== null" class="terminal-output">
                           <pre class="terminal-text" v-html="highlightOutput(result.output.stdout)"></pre>
+                        </div>
+                        <div v-else-if="result.output && (result.output.stdout === undefined || result.output.stdout === null) && !result.output.stderr" class="terminal-output">
+                          <pre class="terminal-text" style="color: #909399;">(无输出)</pre>
                         </div>
 
                         <!-- 错误输出 -->
-                        <div v-if="result.output.stderr" class="terminal-output stderr">
-                          <pre class="terminal-text error">{{ result.output.stderr }}</pre>
+                        <div v-if="result.output && result.output.stderr" class="terminal-output stderr">
+                          <pre class="terminal-text error" v-html="highlightOutput(result.output.stderr)"></pre>
                         </div>
 
                         <!-- 退出码 -->
@@ -348,7 +343,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   VideoPlay, Loading, Connection,
   CircleCheck, CircleClose, ArrowDown
@@ -362,6 +357,7 @@ const formRef = ref()
 const submitting = ref(false)
 const streaming = ref(false)  // 流式执行状态
 const streamController = ref(null)  // SSE 控制器，用于取消请求
+const currentTaskId = ref(null)  // 当前流式任务的 task_id
 const shellCommand = ref('ls -la')
 const executionResults = ref([])
 const pollingTimers = ref({})
@@ -386,24 +382,15 @@ const clientIdsList = computed(() => {
 const form = reactive({
   client_id: route.query.client_id || '',
   client_ids: [],
-  command_type: 'exec_shell',
+  command_type: 'exec_shell', // 固定为 shell 命令
   payload: JSON.stringify({ command: 'ls -la', timeout: 30 }, null, 2),
   timeout: 30
 })
 
 // 验证规则
 const rules = {
-  client_id: [{ required: true, message: '请选择客户端', trigger: 'change' }],
-  command_type: [{ required: true, message: '请选择命令类型', trigger: 'change' }]
+  client_id: [{ required: true, message: '请选择客户端', trigger: 'change' }]
 }
-
-// 命令类型
-const commandTypes = [
-  { label: '执行Shell命令', value: 'exec_shell' },
-  { label: '获取状态', value: 'get_status' },
-  { label: '重启服务', value: 'restart' },
-  { label: '更新配置', value: 'update_config' }
-]
 
 // 清空统计
 function clearStats() {
@@ -446,16 +433,6 @@ function isOfflineError(error) {
   return offlinePatterns.some(pattern => errorStr.includes(pattern))
 }
 
-// 命令类型改变
-function onCommandTypeChange(type) {
-  if (type === 'exec_shell') {
-    updatePayloadFromShell()
-  } else if (type === 'get_status') {
-    form.payload = '{}'
-  } else if (type === 'restart') {
-    form.payload = JSON.stringify({ delay_seconds: 5 }, null, 2)
-  }
-}
 
 // 从 shell 命令更新 payload
 function updatePayloadFromShell() {
@@ -566,6 +543,7 @@ async function submitStreamCommand() {
   }
 
   streaming.value = true
+  currentTaskId.value = null
   updatePayloadFromShell()
 
   // 清空之前的结果
@@ -617,10 +595,18 @@ async function submitStreamCommand() {
           executionResults.value = [...executionResults.value, newResult]
         }
       },
+      // onStart 回调 - 任务开始时调用（包含 task_id）
+      (eventData) => {
+        if (eventData.task_id) {
+          currentTaskId.value = eventData.task_id
+          console.log('Stream task started:', eventData.task_id)
+        }
+      },
       // onComplete 回调 - 全部完成时调用
       (summary) => {
         console.log('Stream complete:', summary)
         streaming.value = false
+        currentTaskId.value = null
         streamController.value = null
         ElMessage.success(`执行完成: 成功 ${summary.success_count}, 失败 ${summary.failed_count}, 耗时 ${summary.duration_ms}ms`)
       },
@@ -628,6 +614,7 @@ async function submitStreamCommand() {
       (error) => {
         console.error('Stream error:', error)
         streaming.value = false
+        currentTaskId.value = null
         streamController.value = null
         ElMessage.error('流式执行失败: ' + (error.message || '未知错误'))
       }
@@ -635,7 +622,48 @@ async function submitStreamCommand() {
   } catch (error) {
     ElMessage.error('命令执行失败: ' + (error.message || '未知错误'))
     streaming.value = false
+    currentTaskId.value = null
     streamController.value = null
+  }
+}
+
+// 处理取消流式任务
+async function handleCancelStream() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要中止当前任务吗？未发送的命令将被取消，已发送的命令将继续执行。',
+      '确认中止',
+      {
+        confirmButtonText: '确定中止',
+        cancelButtonText: '取消',
+        type: 'warning',
+        dangerouslyUseHTMLString: false
+      }
+    )
+
+    // 用户确认中止
+    if (currentTaskId.value) {
+      try {
+        await api.cancelMultiCommand(currentTaskId.value)
+        ElMessage.success('任务已中止')
+      } catch (error) {
+        ElMessage.error('中止任务失败: ' + (error.message || '未知错误'))
+      }
+    }
+
+    // 关闭流式连接
+    if (streamController.value) {
+      streamController.value.close()
+      streamController.value = null
+    }
+
+    streaming.value = false
+    currentTaskId.value = null
+  } catch (error) {
+    // 用户取消操作，不做任何处理
+    if (error !== 'cancel') {
+      console.error('Cancel stream error:', error)
+    }
   }
 }
 
@@ -651,9 +679,132 @@ function parseResultOutput(result) {
   return output
 }
 
+// 将 ANSI 转义码转换为 HTML/CSS 样式
+function ansiToHtml(text) {
+  if (!text) return ''
+  
+  // ANSI 颜色码映射
+  const ansiColors = {
+    // 前景色
+    '30': '#000000', '31': '#cd0000', '32': '#00cd00', '33': '#cdcd00',
+    '34': '#0000ee', '35': '#cd00cd', '36': '#00cdcd', '37': '#e5e5e5',
+    // 背景色
+    '40': '#000000', '41': '#cd0000', '42': '#00cd00', '43': '#cdcd00',
+    '44': '#0000ee', '45': '#cd00cd', '46': '#00cdcd', '47': '#ffffff'
+  }
+  
+  // 转义 HTML 特殊字符
+  const escapeHtml = (str) => {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+  
+  let html = ''
+  let currentStyle = {
+    color: null,
+    backgroundColor: null,
+    bold: false
+  }
+  
+  // 处理 ANSI 码（包括 \x1b[ 和直接 [ 开头的格式）
+  const ansiPattern = /(\x1b\[|\u001b\[|\[)([0-9;]*)m/g
+  let lastIndex = 0
+  let match
+  
+  const closeCurrentSpan = () => {
+    if (currentStyle.color || currentStyle.backgroundColor || currentStyle.bold) {
+      html += '</span>'
+    }
+  }
+  
+  const openSpan = (style) => {
+    const styles = []
+    if (style.color) styles.push(`color: ${style.color}`)
+    if (style.backgroundColor) styles.push(`background-color: ${style.backgroundColor}`)
+    if (style.bold) styles.push('font-weight: bold')
+    if (styles.length > 0) {
+      html += `<span style="${styles.join('; ')}">`
+    }
+  }
+  
+  while ((match = ansiPattern.exec(text)) !== null) {
+    // 添加匹配前的文本
+    const beforeText = text.substring(lastIndex, match.index)
+    if (beforeText) {
+      const escaped = escapeHtml(beforeText)
+      if (currentStyle.color || currentStyle.backgroundColor || currentStyle.bold) {
+        html += escaped
+      } else {
+        html += escaped
+      }
+    }
+    
+    // 处理 ANSI 码
+    const codes = match[2].split(';').filter(c => c !== '')
+    let newStyle = { ...currentStyle }
+    
+    for (const code of codes) {
+      if (code === '0' || code === '') {
+        // 重置
+        newStyle = { color: null, backgroundColor: null, bold: false }
+      } else if (code === '1') {
+        // 粗体
+        newStyle.bold = true
+      } else if (code in ansiColors) {
+        const color = ansiColors[code]
+        if (code >= '30' && code <= '37') {
+          // 前景色
+          newStyle.color = color
+        } else if (code >= '40' && code <= '47') {
+          // 背景色
+          newStyle.backgroundColor = color
+        }
+      }
+    }
+    
+    // 如果样式改变，关闭旧 span，打开新 span
+    if (JSON.stringify(newStyle) !== JSON.stringify(currentStyle)) {
+      closeCurrentSpan()
+      currentStyle = newStyle
+      openSpan(currentStyle)
+    }
+    
+    lastIndex = match.index + match[0].length
+  }
+  
+  // 添加剩余文本
+  const remainingText = text.substring(lastIndex)
+  if (remainingText) {
+    html += escapeHtml(remainingText)
+  }
+  
+  // 关闭未关闭的标签
+  closeCurrentSpan()
+  
+  return html
+}
+
 // 高亮输出内容
 function highlightOutput(text) {
+  // 处理非字符串类型
+  if (text === null || text === undefined) return ''
+  if (typeof text !== 'string') {
+    text = String(text)
+  }
+  
+  // 即使原始内容为空或只有空格，也要处理（二维码输出可能主要是空格）
   if (!text) return ''
+
+  // 检查是否包含 ANSI 转义码（用于二维码等）
+  const hasAnsi = /(\x1b\[|\u001b\[|\[)[0-9;]*m/.test(text)
+  
+  if (hasAnsi) {
+    // 如果包含 ANSI 码，转换为 HTML
+    return ansiToHtml(text)
+  }
 
   // 转义 HTML 特殊字符
   const escapeHtml = (str) => {
@@ -798,7 +949,9 @@ onUnmounted(() => {
   // 取消流式请求
   if (streamController.value) {
     streamController.value.close()
+    streamController.value = null
   }
+  currentTaskId.value = null
 })
 </script>
 
@@ -1192,10 +1345,11 @@ onUnmounted(() => {
   margin: 0;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.2;
   color: #d4d4d4;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: keep-all;
+  overflow-x: auto;
 }
 
 .terminal-text.error {
