@@ -176,6 +176,20 @@
   - 预计：2 小时
 
 #### 功能增强
+- [ ] **T067**: 集成 quicssh (github.com/moul/quicssh)
+  - 描述：将基于 QUIC 协议的 SSH 实现集成到项目中
+  - 目的：通过 QUIC 的优势（低延迟、连接迁移等）增强 SSH 性能和可靠性
+  - 步骤：
+    1. 获取 quicssh 源码：`go get moul.io/quicssh`
+    2. 研究 quicssh API 和使用方式
+    3. 设计集成方案（作为命令处理器或独立服务）
+    4. 实现集成代码
+    5. 添加配置选项和文档
+  - 参考：https://github.com/moul/quicssh, https://pkg.go.dev/moul.io/quicssh
+  - 预计：10-15 小时
+  - 优先级：⭐⭐
+  - 状态：待开始
+
 - [ ] WebSocket 支持 (可选)
   - 描述：为 Web 客户端提供 WebSocket 接口
   - 预计：8-10 小时
@@ -228,4 +242,4 @@
 
 ---
 
-最后更新：2025-12-24
+最后更新：2025-12-31
