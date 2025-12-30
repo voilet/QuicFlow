@@ -176,18 +176,57 @@
   - 预计：2 小时
 
 #### 功能增强
-- [ ] **T067**: 集成 quicssh (github.com/moul/quicssh)
-  - 描述：将基于 QUIC 协议的 SSH 实现集成到项目中
-  - 目的：通过 QUIC 的优势（低延迟、连接迁移等）增强 SSH 性能和可靠性
-  - 步骤：
-    1. 获取 quicssh 源码：`go get moul.io/quicssh`
-    2. 研究 quicssh API 和使用方式
-    3. 设计集成方案（作为命令处理器或独立服务）
-    4. 实现集成代码
-    5. 添加配置选项和文档
-  - 参考：https://github.com/moul/quicssh, https://pkg.go.dev/moul.io/quicssh
-  - 预计：10-15 小时
-  - 优先级：⭐⭐
+- [ ] **T067**: 在 QUIC 流上运行 SSH 协议层
+  - 描述：使用 `golang.org/x/crypto/ssh` 包，将 QUIC 流包装成 `net.Conn`，在其上建立 SSH 握手
+  - 架构设计：
+    - **传输层**：UDP
+    - **隧道层**：QUIC (多路复用、加密、拥塞控制)
+    - **应用层**：SSH (权限控制、Shell 交互、文件传输)
+  - 实现步骤：
+    1. **实现 StreamConn 适配器**
+       - 将 `quic.Stream` 转换为 `net.Conn`
+       - 实现 `LocalAddr()`, `RemoteAddr()`, `SetDeadline()` 等方法
+       - 文件：`pkg/ssh/adapter.go`
+    2. **客户端（内网侧）：运行 SSH Server**
+       - 监听来自 QUIC 的流
+       - 在 Stream 上启动 SSH 服务
+       - 配置 SSH Server（主机密钥、密码验证）
+       - 处理 SSH 请求（Shell、端口转发等）
+       - 文件：`pkg/ssh/server.go`
+    3. **服务端（公网侧）：作为 SSH Client**
+       - 主动打开 QUIC Stream
+       - 在 Stream 上运行 SSH Client 逻辑
+       - 配置 SSH 客户端认证
+       - 支持多会话复用（每个会话一个独立的 QUIC Stream）
+       - 文件：`pkg/ssh/client.go`
+    4. **Stream 类型识别**
+       - 在 `AcceptStream` 后发送握手信号（魔数）
+       - 区分业务数据、文件传输、反向 SSH 等 Stream 类型
+       - 文件：`pkg/ssh/protocol.go`
+    5. **配置和文档**
+       - 添加 SSH 相关配置选项
+       - 编写使用文档和示例
+       - 文件：`pkg/ssh/config.go`, `docs/ssh-over-quic.md`
+  - 优势：
+    - ✅ 协议分层清晰，职责明确
+    - ✅ 双重加密：QUIC 层 + SSH 层
+    - ✅ 内网穿透：反向 SSH 通道永久可用
+    - ✅ 多路复用：同一 QUIC 连接可开启多个 SSH 会话
+    - ✅ 复用现有 QUIC 长连接，无需额外连接
+  - 技术要点：
+    - 使用 `golang.org/x/crypto/ssh` 标准库
+    - `quic.Stream` 实现 `io.Reader` 和 `io.Writer`
+    - 适配器模式：`StreamConn` 实现 `net.Conn` 接口
+    - `ssh.NewClientConn` / `ssh.NewServerConn` 需要标准 `net.Conn`
+  - 安全考虑：
+    - QUIC 层加密 + SSH 层加密双重保护
+    - 即使 QUIC 认证被攻破，仍需 SSH 密钥/密码
+    - 生产环境建议使用密钥认证而非密码
+  - 参考：
+    - `golang.org/x/crypto/ssh` 官方文档
+    - QUIC Stream 接口：`github.com/quic-go/quic-go`
+  - 预计：15-20 小时
+  - 优先级：⭐⭐⭐
   - 状态：待开始
 
 - [ ] WebSocket 支持 (可选)
