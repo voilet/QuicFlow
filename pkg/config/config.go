@@ -248,15 +248,27 @@ func Load(configPath string) (*ServerConfig, error) {
 	// 读取配置文件
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			// 如果指定了配置文件路径，给出更详细的错误信息
+			if configPath != "" {
+				return nil, fmt.Errorf("failed to read config file %s: %w", configPath, err)
+			}
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
 		// 配置文件不存在，使用默认值
+		if configPath != "" {
+			// 如果明确指定了配置文件但不存在，返回错误
+			return nil, fmt.Errorf("config file not found: %s", configPath)
+		}
 	}
 
 	// 解析配置
 	cfg := &ServerConfig{}
 	if err := v.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+		configPathUsed := configPath
+		if configPathUsed == "" {
+			configPathUsed = v.ConfigFileUsed()
+		}
+		return nil, fmt.Errorf("failed to unmarshal config from %s: %w", configPathUsed, err)
 	}
 
 	return cfg, nil

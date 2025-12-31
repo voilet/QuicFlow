@@ -71,8 +71,8 @@ var genConfigCmd = &cobra.Command{
 }
 
 func init() {
-	// 主命令参数
-	rootCmd.Flags().StringVarP(&configFile, "config", "c", "", "配置文件路径")
+	// 主命令参数（默认使用 config/server.yaml）
+	rootCmd.Flags().StringVarP(&configFile, "config", "c", "config/server.yaml", "配置文件路径")
 
 	// 生成配置命令参数
 	genConfigCmd.Flags().StringVarP(&genConfig, "output", "o", "config/server.yaml", "输出配置文件路径")
@@ -189,6 +189,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 添加流式 API（SSE）
 	httpServer.AddStreamRoutes()
 
+	// 创建 SSH 客户端管理器
+	sshManager := NewSSHClientManager(srv, nil, logger)
+	sshAPIAdapter := NewSSHClientManagerAPIAdapter(sshManager)
+	httpServer.AddSSHRoutes(sshAPIAdapter)
+	logger.Info("SSH client manager created")
+
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
 		os.Exit(1)
@@ -199,6 +205,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	if batchExecutor != nil {
 		logger.Info("Batch execution enabled")
 	}
+	logger.Info("SSH over QUIC enabled")
 	logger.Info("Press Ctrl+C to stop")
 
 	// 定期打印统计信息
@@ -213,6 +220,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	if batchExecutor != nil {
 		batchExecutor.Stop()
 	}
+	sshManager.Close()
 	shutdownServer(logger, disp, httpServer, srv)
 }
 

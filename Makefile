@@ -122,7 +122,7 @@ certs:
 ## run-server: Run the server
 run-server: build
 	@echo "Starting server..."
-	./$(BUILD_DIR)/$(BINARY_SERVER)
+	./$(BUILD_DIR)/$(BINARY_SERVER) --config config/server.yaml
 
 ## run-client: Run the client
 run-client: build
