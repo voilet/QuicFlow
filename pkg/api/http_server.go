@@ -586,3 +586,38 @@ func (h *HTTPServer) handleCancelMultiCommand(c *gin.Context) {
 		"message": "Task cancelled successfully",
 	})
 }
+
+// AddTerminalRoutes 添加 WebSocket 终端路由
+func (h *HTTPServer) AddTerminalRoutes(tm *TerminalManager) {
+	api := h.router.Group("/api/terminal")
+	{
+		// WebSocket 终端连接
+		api.GET("/ws/:client_id", tm.HandleWebSocket)
+
+		// 列出所有终端会话
+		api.GET("/sessions", tm.HandleTerminalSessionsList)
+
+		// 关闭指定终端会话
+		api.DELETE("/sessions/:session_id", tm.HandleTerminalSessionClose)
+	}
+	h.logger.Info("Terminal API routes added")
+}
+
+// AddAuditRoutes adds audit API routes
+func (h *HTTPServer) AddAuditRoutes(auditAPI *AuditAPI) {
+	api := h.router.Group("/api")
+	auditAPI.RegisterRoutes(api)
+	h.logger.Info("Audit API routes added")
+}
+
+// AddRecordingRoutes adds recording API routes
+func (h *HTTPServer) AddRecordingRoutes(recordingAPI *RecordingAPI) {
+	api := h.router.Group("/api")
+	recordingAPI.RegisterRoutes(api)
+	h.logger.Info("Recording API routes added")
+}
+
+// GetRouter 返回 gin.Engine 路由器（用于外部注册更多路由）
+func (h *HTTPServer) GetRouter() *gin.Engine {
+	return h.router
+}

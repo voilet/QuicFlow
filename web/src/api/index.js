@@ -135,7 +135,79 @@ export const api = {
   // 取消多播任务
   cancelMultiCommand(taskId) {
     return request.post(`/command/multi/${taskId}/cancel`)
+  },
+
+  // ===== 终端 API =====
+
+  // 获取终端会话列表
+  getTerminalSessions() {
+    return request.get('/terminal/sessions')
+  },
+
+  // 关闭终端会话
+  closeTerminalSession(sessionId) {
+    return request.delete(`/terminal/sessions/${sessionId}`)
+  },
+
+  // ===== 审计 API =====
+
+  // 获取审计命令列表
+  getAuditCommands(params = {}) {
+    return request.get('/audit/commands', { params })
+  },
+
+  // 获取会话的审计命令
+  getAuditCommandsBySession(sessionId) {
+    return request.get(`/audit/commands/${sessionId}`)
+  },
+
+  // 获取审计统计
+  getAuditStats() {
+    return request.get('/audit/stats')
+  },
+
+  // 导出审计日志
+  exportAuditLogs(format = 'json') {
+    return `/api/audit/export?format=${format}`
+  },
+
+  // 清理旧审计记录
+  cleanupAuditRecords(days = 90) {
+    return request.delete('/audit/cleanup', { params: { days } })
+  },
+
+  // ===== 录像 API =====
+
+  // 获取录像列表
+  getRecordings(params = {}) {
+    return request.get('/recordings', { params })
+  },
+
+  // 获取录像详情
+  getRecording(id) {
+    return request.get(`/recordings/${id}`)
+  },
+
+  // 下载录像
+  getRecordingDownloadUrl(id) {
+    return `/api/recordings/${id}/download`
+  },
+
+  // 删除录像
+  deleteRecording(id) {
+    return request.delete(`/recordings/${id}`)
+  },
+
+  // 获取录像统计
+  getRecordingStats() {
+    return request.get('/recordings/stats')
+  },
+
+  // 清理旧录像
+  cleanupRecordings(days = 30) {
+    return request.delete('/recordings/cleanup', { params: { days } })
   }
 }
 
+export { request }
 export default api

@@ -22,6 +22,18 @@
           <el-icon><Document /></el-icon>
           <span>命令历史</span>
         </el-menu-item>
+        <el-menu-item index="/terminal">
+          <el-icon><Monitor /></el-icon>
+          <span>SSH 终端</span>
+        </el-menu-item>
+        <el-menu-item index="/audit">
+          <el-icon><List /></el-icon>
+          <span>命令审计</span>
+        </el-menu-item>
+        <el-menu-item index="/recordings">
+          <el-icon><VideoCamera /></el-icon>
+          <span>会话录像</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -62,7 +74,10 @@ const pageTitle = computed(() => {
   const titles = {
     '/': '客户端管理',
     '/command': '命令下发',
-    '/history': '命令历史'
+    '/history': '命令历史',
+    '/terminal': 'SSH 终端',
+    '/audit': '命令审计',
+    '/recordings': '会话录像'
   }
   return titles[route.path] || 'QUIC 命令管理系统'
 })

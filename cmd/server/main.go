@@ -11,12 +11,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/api"
+	"github.com/voilet/quic-flow/pkg/audit"
 	"github.com/voilet/quic-flow/pkg/batch"
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/config"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
+	"github.com/voilet/quic-flow/pkg/recording"
 	"github.com/voilet/quic-flow/pkg/router"
 	"github.com/voilet/quic-flow/pkg/transport/server"
 	"github.com/voilet/quic-flow/pkg/version"
@@ -195,6 +197,43 @@ func runServer(cmd *cobra.Command, args []string) {
 	httpServer.AddSSHRoutes(sshAPIAdapter)
 	logger.Info("SSH client manager created")
 
+	// 创建审计存储（每个会话一个文件）
+	auditStore, err := audit.NewSessionFileStore("data/audit")
+	if err != nil {
+		logger.Error("Failed to create audit store", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("Audit store created", "path", "data/audit")
+
+	// 创建录像存储
+	recordingStore, err := recording.NewStore("data/recordings")
+	if err != nil {
+		logger.Error("Failed to create recording store", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("Recording store created", "path", "data/recordings")
+
+	// 创建录像配置
+	recordingConfig := &recording.Config{
+		Enabled:     true,
+		StorePath:   "data/recordings",
+		RecordInput: true,
+	}
+
+	// 创建终端管理器（WebSocket SSH 终端）带审计和录像
+	terminalAdapter := NewSSHTerminalAdapter(sshManager)
+	terminalManager := api.NewTerminalManagerWithRecording(terminalAdapter, logger, auditStore, recordingConfig)
+	httpServer.AddTerminalRoutes(terminalManager)
+	logger.Info("Terminal WebSocket routes added")
+
+	// 添加审计 API 路由
+	auditAPI := api.NewAuditAPI(auditStore, logger)
+	httpServer.AddAuditRoutes(auditAPI)
+
+	// 添加录像 API 路由
+	recordingAPI := api.NewRecordingAPI(recordingStore, logger)
+	httpServer.AddRecordingRoutes(recordingAPI)
+
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
 		os.Exit(1)
@@ -221,6 +260,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		batchExecutor.Stop()
 	}
 	sshManager.Close()
+	auditStore.Close()
 	shutdownServer(logger, disp, httpServer, srv)
 }
 
