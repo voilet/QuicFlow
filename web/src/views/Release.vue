@@ -123,35 +123,55 @@
 
           <!-- 最近部署日志 -->
           <div class="recent-logs" v-if="globalRecentLogs.length > 0">
-            <h4>最近部署记录</h4>
-            <el-table :data="globalRecentLogs" size="small" stripe max-height="300">
-              <el-table-column prop="project_name" label="项目" width="120" show-overflow-tooltip />
-              <el-table-column prop="client_id" label="客户端" width="150" show-overflow-tooltip />
-              <el-table-column prop="version" label="版本" width="100">
-                <template #default="{ row }">
-                  <el-tag size="small">{{ row.version }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="operation" label="操作" width="80">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="getOperationTag(row.operation)">
-                    {{ getOperationLabel(row.operation) }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="status" label="结果" width="80">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="getLogStatusTag(row.status)">
-                    {{ getLogStatusLabel(row.status) }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="started_at" label="时间" width="160">
-                <template #default="{ row }">
-                  {{ formatTime(row.started_at) }}
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="recent-logs-header">
+              <h4>最近部署记录</h4>
+              <el-tag type="info" size="small">{{ globalRecentLogs.length }} 条记录</el-tag>
+            </div>
+            <div class="recent-logs-table-wrapper">
+              <el-table 
+                :data="globalRecentLogs" 
+                size="default" 
+                stripe 
+                max-height="300"
+                class="recent-logs-table"
+                table-layout="auto"
+              >
+                <el-table-column prop="project_name" label="项目" min-width="120" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span class="table-cell-text">{{ row.project_name }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="client_id" label="客户端" min-width="120" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span class="table-cell-text">{{ row.client_id }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="version" label="版本" min-width="100">
+                  <template #default="{ row }">
+                    <el-tag size="small" effect="plain" type="primary">{{ row.version }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="operation" label="操作" min-width="90">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="getOperationTag(row.operation)" effect="plain">
+                      {{ getOperationLabel(row.operation) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="status" label="结果" min-width="90">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="getLogStatusTag(row.status)" effect="plain">
+                      {{ getLogStatusLabel(row.status) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="started_at" label="时间" min-width="160">
+                  <template #default="{ row }">
+                    <span class="table-cell-time">{{ formatTime(row.started_at) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
           </div>
 
           <el-empty v-else-if="!loadingGlobalStats" description="暂无部署记录，请选择项目开始部署" :image-size="80" />
@@ -218,77 +238,93 @@
               <!-- 部署任务 -->
               <el-tab-pane label="部署任务" name="tasks">
                 <div class="tab-header">
-                  <el-radio-group v-model="taskStatusFilter" size="small">
+                  <el-radio-group v-model="taskStatusFilter" size="default" class="task-filter-group">
                     <el-radio-button value="">全部</el-radio-button>
                     <el-radio-button value="pending">待执行</el-radio-button>
                     <el-radio-button value="running">执行中</el-radio-button>
                     <el-radio-button value="canary">金丝雀中</el-radio-button>
                     <el-radio-button value="completed">已完成</el-radio-button>
                   </el-radio-group>
+                  <el-tag type="info" size="small" class="task-count-tag">
+                    {{ filteredTasks.length }} 个任务
+                  </el-tag>
                 </div>
 
-                <el-table :data="filteredTasks" v-loading="loadingTasks" stripe>
-                  <el-table-column prop="version" label="版本" width="100">
-                    <template #default="{ row }">
-                      <el-tag size="small">{{ row.version }}</el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="operation" label="操作" width="80">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="getOperationTag(row.operation)">
-                        {{ getOperationLabel(row.operation) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="status" label="状态" width="100">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="getTaskStatusTag(row.status)">
-                        {{ getTaskStatusLabel(row.status) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="进度" width="180">
-                    <template #default="{ row }">
-                      <div class="progress-cell">
-                        <el-progress
-                          :percentage="getTaskProgress(row)"
-                          :status="getProgressStatus(row.status)"
-                          :stroke-width="6"
-                        />
-                        <span class="progress-text">{{ row.success_count || 0 }}/{{ row.total_count || 0 }}</span>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="schedule_type" label="执行方式" width="100">
-                    <template #default="{ row }">
-                      {{ row.schedule_type === 'immediate' ? '立即执行' : '定时执行' }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="canary_enabled" label="金丝雀" width="80">
-                    <template #default="{ row }">
-                      <el-tag v-if="row.canary_enabled" size="small" type="warning">
-                        {{ row.canary_percent }}%
-                      </el-tag>
-                      <span v-else>-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="200" fixed="right">
-                    <template #default="{ row }">
-                      <template v-if="row.status === 'pending'">
-                        <el-button type="primary" size="small" @click="startTask(row)">开始</el-button>
-                        <el-button size="small" @click="cancelTask(row)">取消</el-button>
+                <div class="tasks-table-wrapper">
+                  <el-table 
+                    :data="filteredTasks" 
+                    v-loading="loadingTasks" 
+                    stripe
+                    class="tasks-table"
+                    table-layout="auto"
+                  >
+                    <el-table-column prop="version" label="版本" min-width="100">
+                      <template #default="{ row }">
+                        <el-tag size="small" effect="plain" type="primary">{{ row.version }}</el-tag>
                       </template>
-                      <template v-else-if="row.status === 'canary'">
-                        <el-button type="success" size="small" @click="promoteTask(row)">全量发布</el-button>
-                        <el-button type="danger" size="small" @click="rollbackTask(row)">回滚</el-button>
+                    </el-table-column>
+                    <el-table-column prop="operation" label="操作" min-width="90">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="getOperationTag(row.operation)" effect="plain">
+                          {{ getOperationLabel(row.operation) }}
+                        </el-tag>
                       </template>
-                      <template v-else-if="row.status === 'running'">
-                        <el-button type="warning" size="small" @click="pauseTask(row)">暂停</el-button>
+                    </el-table-column>
+                    <el-table-column prop="status" label="状态" min-width="100">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="getTaskStatusTag(row.status)" effect="plain">
+                          {{ getTaskStatusLabel(row.status) }}
+                        </el-tag>
                       </template>
-                      <el-button size="small" @click="viewTask(row)">详情</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
+                    </el-table-column>
+                    <el-table-column label="进度" min-width="200">
+                      <template #default="{ row }">
+                        <div class="progress-cell">
+                          <el-progress
+                            :percentage="getTaskProgress(row)"
+                            :status="getProgressStatus(row.status)"
+                            :stroke-width="8"
+                            class="task-progress-bar"
+                          />
+                          <span class="progress-text">{{ row.success_count || 0 }}/{{ row.total_count || 0 }}</span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="schedule_type" label="执行方式" min-width="110">
+                      <template #default="{ row }">
+                        <span class="table-cell-text">
+                          {{ row.schedule_type === 'immediate' ? '立即执行' : '定时执行' }}
+                        </span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="canary_enabled" label="金丝雀" min-width="90">
+                      <template #default="{ row }">
+                        <el-tag v-if="row.canary_enabled" size="small" type="warning" effect="plain">
+                          {{ row.canary_percent }}%
+                        </el-tag>
+                        <span v-else class="table-cell-empty">-</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" min-width="220" fixed="right">
+                      <template #default="{ row }">
+                        <div class="task-actions">
+                          <template v-if="row.status === 'pending'">
+                            <el-button type="primary" size="small" @click="startTask(row)">开始</el-button>
+                            <el-button size="small" @click="cancelTask(row)">取消</el-button>
+                          </template>
+                          <template v-else-if="row.status === 'canary'">
+                            <el-button type="success" size="small" @click="promoteTask(row)">全量发布</el-button>
+                            <el-button type="danger" size="small" @click="rollbackTask(row)">回滚</el-button>
+                          </template>
+                          <template v-else-if="row.status === 'running'">
+                            <el-button type="warning" size="small" @click="pauseTask(row)">暂停</el-button>
+                          </template>
+                          <el-button size="small" @click="viewTask(row)">详情</el-button>
+                        </div>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
               </el-tab-pane>
 
               <!-- 部署记录 -->
@@ -324,49 +360,61 @@
                 </div>
 
                 <!-- 日志列表 -->
-                <el-table :data="deployLogs" v-loading="loadingLogs" stripe>
-                  <el-table-column prop="client_id" label="客户端" width="150" show-overflow-tooltip />
-                  <el-table-column prop="version" label="版本" width="100">
-                    <template #default="{ row }">
-                      <el-tag size="small">{{ row.version }}</el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="operation" label="操作" width="80">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="getOperationTag(row.operation)">
-                        {{ getOperationLabel(row.operation) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="status" label="结果" width="80">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="getLogStatusTag(row.status)">
-                        {{ getLogStatusLabel(row.status) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="is_canary" label="金丝雀" width="70">
-                    <template #default="{ row }">
-                      <el-tag v-if="row.is_canary" size="small" type="warning">是</el-tag>
-                      <span v-else>-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="duration" label="耗时" width="80">
-                    <template #default="{ row }">
-                      {{ formatDuration(row.duration) }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="started_at" label="执行时间" width="180">
-                    <template #default="{ row }">
-                      {{ formatTime(row.started_at) }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="80">
-                    <template #default="{ row }">
-                      <el-button size="small" @click="viewLog(row)">详情</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
+                <div class="deploy-logs-table-wrapper">
+                  <el-table 
+                    :data="deployLogs" 
+                    v-loading="loadingLogs" 
+                    stripe
+                    class="deploy-logs-table"
+                    table-layout="auto"
+                  >
+                    <el-table-column prop="client_id" label="客户端" min-width="120" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        <span class="table-cell-text">{{ row.client_id }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="version" label="版本" min-width="100">
+                      <template #default="{ row }">
+                        <el-tag size="small" effect="plain" type="primary">{{ row.version }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="operation" label="操作" min-width="90">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="getOperationTag(row.operation)" effect="plain">
+                          {{ getOperationLabel(row.operation) }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="status" label="结果" min-width="90">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="getLogStatusTag(row.status)" effect="plain">
+                          {{ getLogStatusLabel(row.status) }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="is_canary" label="金丝雀" min-width="80">
+                      <template #default="{ row }">
+                        <el-tag v-if="row.is_canary" size="small" type="warning" effect="plain">是</el-tag>
+                        <span v-else class="table-cell-empty">-</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="duration" label="耗时" min-width="90">
+                      <template #default="{ row }">
+                        <span class="table-cell-time">{{ formatDuration(row.duration) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="started_at" label="执行时间" min-width="160">
+                      <template #default="{ row }">
+                        <span class="table-cell-time">{{ formatTime(row.started_at) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" min-width="100" fixed="right">
+                      <template #default="{ row }">
+                        <el-button size="small" @click="viewLog(row)">详情</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
               </el-tab-pane>
             </el-tabs>
           </el-card>
@@ -1724,7 +1772,7 @@ onMounted(() => {
 
 <style scoped>
 .release-page {
-  padding: 20px;
+  padding: 0;
 }
 
 .page-header {
@@ -1732,15 +1780,26 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  padding: 0 4px;
 }
 
 .page-header h2 {
   margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .project-card {
   height: calc(100vh - 160px);
   overflow: hidden;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
 }
 
 .project-card :deep(.el-card__body) {
@@ -1749,10 +1808,18 @@ onMounted(() => {
   overflow-y: auto;
 }
 
+.project-card :deep(.el-card__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 15px 20px;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-weight: 600;
+  color: var(--tech-text-primary);
 }
 
 .project-title {
@@ -1769,23 +1836,30 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px;
-  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
 }
 
 .project-item:hover {
-  background: #f5f7fa;
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
 }
 
 .project-item.active {
-  background: #ecf5ff;
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-primary);
+  border-left: 3px solid var(--tech-primary);
 }
 
 .project-name {
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--tech-text-primary);
+  font-size: 14px;
 }
 
 .project-meta {
@@ -1796,7 +1870,7 @@ onMounted(() => {
 
 .version-count {
   font-size: 12px;
-  color: #909399;
+  color: var(--tech-text-muted);
 }
 
 .more-icon {
@@ -1818,6 +1892,14 @@ onMounted(() => {
 .overview-card {
   height: calc(100vh - 160px);
   overflow: auto;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+}
+
+.overview-card :deep(.el-card__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 15px 20px;
 }
 
 .overview-card :deep(.el-card__body) {
@@ -1845,10 +1927,92 @@ onMounted(() => {
   margin-top: 24px;
 }
 
-.recent-logs h4 {
-  margin: 0 0 12px 0;
+.recent-logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.recent-logs-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.recent-logs-table-wrapper {
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.recent-logs-table {
+  background: transparent;
+}
+
+.recent-logs-table :deep(.el-table__header-wrapper) {
+  background: transparent;
+}
+
+.recent-logs-table :deep(.el-table__header) {
+  background: transparent;
+}
+
+.recent-logs-table :deep(.el-table th) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+  font-weight: 600;
+  padding: 12px;
   font-size: 14px;
-  color: #303133;
+  transition: all 0.3s ease;
+}
+
+.recent-logs-table :deep(.el-table th:hover) {
+  background-color: var(--tech-bg-tertiary);
+  color: var(--tech-text-primary);
+}
+
+.recent-logs-table :deep(.el-table td) {
+  border-color: var(--tech-border);
+  padding: 12px;
+  transition: all 0.2s ease;
+}
+
+.recent-logs-table :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.recent-logs-table :deep(.el-table__row) {
+  transition: all 0.2s ease;
+}
+
+.recent-logs-table :deep(.el-table__row:hover) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.recent-logs-table :deep(.el-table__row:hover td) {
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+}
+
+.table-cell-text {
+  color: var(--tech-text-primary);
+  font-size: 14px;
+}
+
+.table-cell-time {
+  color: var(--tech-text-secondary);
+  font-size: 13px;
+  font-family: var(--tech-font-mono);
+}
+
+.recent-logs-table :deep(.el-tag) {
+  border-radius: 4px;
+  font-weight: 500;
+  border-width: 1px;
 }
 
 .mt-20 {
@@ -1857,25 +2021,234 @@ onMounted(() => {
 
 .info-card {
   margin-bottom: 16px;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+}
+
+.info-card :deep(.el-card__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 15px 20px;
 }
 
 .project-desc {
   margin: 0;
-  color: #909399;
+  color: var(--tech-text-secondary);
+  font-size: 14px;
 }
 
 .main-card {
   height: calc(100vh - 280px);
   overflow: hidden;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
 }
 
 .main-card :deep(.el-card__body) {
   height: 100%;
   overflow: auto;
+  padding: 20px;
+}
+
+.main-card :deep(.el-tabs__header) {
+  margin: 0 0 16px 0;
+  background: transparent;
+}
+
+.main-card :deep(.el-tabs__nav-wrap::after) {
+  background-color: var(--tech-border);
 }
 
 .tab-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 16px;
+  padding: 0 4px;
+}
+
+.task-filter-group {
+  flex: 1;
+}
+
+.task-count-tag {
+  margin-left: 12px;
+}
+
+.tasks-table-wrapper {
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tasks-table {
+  background: transparent;
+}
+
+.tasks-table :deep(.el-table__header-wrapper) {
+  background: transparent;
+}
+
+.tasks-table :deep(.el-table__header) {
+  background: transparent;
+}
+
+.tasks-table :deep(.el-table th) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+  font-weight: 600;
+  padding: 12px;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.tasks-table :deep(.el-table th:hover) {
+  background-color: var(--tech-bg-tertiary);
+  color: var(--tech-text-primary);
+}
+
+.tasks-table :deep(.el-table td) {
+  border-color: var(--tech-border);
+  padding: 12px;
+  transition: all 0.2s ease;
+}
+
+.tasks-table :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.tasks-table :deep(.el-table__row) {
+  transition: all 0.2s ease;
+}
+
+.tasks-table :deep(.el-table__row:hover) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.tasks-table :deep(.el-table__row:hover td) {
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+}
+
+.tasks-table :deep(.el-tag) {
+  border-radius: 4px;
+  font-weight: 500;
+  border-width: 1px;
+}
+
+.table-cell-text {
+  color: var(--tech-text-primary);
+  font-size: 14px;
+}
+
+.table-cell-empty {
+  color: var(--tech-text-muted);
+  font-size: 14px;
+}
+
+.task-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-actions .el-button {
+  margin: 0;
+}
+
+.task-progress-bar {
+  flex: 1;
+}
+
+.task-progress-bar :deep(.el-progress-bar__outer) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.task-progress-bar :deep(.el-progress-bar__inner) {
+  transition: width 0.3s ease;
+}
+
+.deploy-logs-table-wrapper {
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.deploy-logs-table {
+  background: transparent;
+}
+
+.deploy-logs-table :deep(.el-table__header-wrapper) {
+  background: transparent;
+}
+
+.deploy-logs-table :deep(.el-table__header) {
+  background: transparent;
+}
+
+.deploy-logs-table :deep(.el-table th) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+  font-weight: 600;
+  padding: 12px;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.deploy-logs-table :deep(.el-table th:hover) {
+  background-color: var(--tech-bg-tertiary);
+  color: var(--tech-text-primary);
+}
+
+.deploy-logs-table :deep(.el-table td) {
+  border-color: var(--tech-border);
+  padding: 12px;
+  transition: all 0.2s ease;
+}
+
+.deploy-logs-table :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.deploy-logs-table :deep(.el-table__row) {
+  transition: all 0.2s ease;
+}
+
+.deploy-logs-table :deep(.el-table__row:hover) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.deploy-logs-table :deep(.el-table__row:hover td) {
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+}
+
+.deploy-logs-table :deep(.el-tag) {
+  border-radius: 4px;
+  font-weight: 500;
+  border-width: 1px;
+}
+
+.deploy-logs-table :deep(.el-button) {
+  border-radius: 4px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.deploy-logs-table :deep(.el-button:not(.el-button--primary):not(.el-button--danger)) {
+  background-color: var(--tech-bg-secondary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-secondary);
+}
+
+.deploy-logs-table :deep(.el-button:not(.el-button--primary):not(.el-button--danger):hover) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-primary);
+  color: var(--tech-primary);
 }
 
 .progress-cell {
@@ -1886,13 +2259,13 @@ onMounted(() => {
 
 .progress-text {
   font-size: 12px;
-  color: #909399;
+  color: var(--tech-text-muted);
   white-space: nowrap;
 }
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: var(--tech-text-muted);
 }
 
 .ml-2 {
@@ -1906,12 +2279,15 @@ onMounted(() => {
 .task-progress {
   margin: 20px 0;
   padding: 16px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  background: var(--tech-bg-tertiary);
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
 }
 
 .task-progress h4 {
   margin: 0 0 12px 0;
+  font-weight: 600;
+  color: var(--tech-text-primary);
 }
 
 .progress-stats {
@@ -1925,15 +2301,15 @@ onMounted(() => {
 }
 
 .progress-stats .success {
-  color: #67c23a;
+  color: var(--tech-secondary);
 }
 
 .progress-stats .failed {
-  color: #f56c6c;
+  color: var(--tech-danger);
 }
 
 .progress-stats .pending {
-  color: #909399;
+  color: var(--tech-text-muted);
 }
 
 .script-tabs {
@@ -1965,46 +2341,68 @@ onMounted(() => {
 }
 
 .stat-card {
-  background: #f5f7fa;
-  padding: 16px;
-  border-radius: 8px;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  padding: 20px;
+  border-radius: 4px;
   text-align: center;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.stat-card:hover {
+  box-shadow: var(--tech-shadow-md);
+  transform: translateY(-2px);
 }
 
 .stat-card.success {
-  background: #f0f9eb;
+  background-color: rgba(103, 194, 58, 0.05);
+  border-color: rgba(103, 194, 58, 0.2);
 }
 
 .stat-card.danger {
-  background: #fef0f0;
+  background-color: rgba(245, 108, 108, 0.05);
+  border-color: rgba(245, 108, 108, 0.2);
 }
 
 .stat-card.primary {
-  background: #ecf5ff;
+  background-color: rgba(64, 158, 255, 0.05);
+  border-color: rgba(64, 158, 255, 0.2);
 }
 
 .stat-value {
   font-size: 28px;
   font-weight: 600;
-  color: #303133;
+  color: var(--tech-text-primary);
+  margin-bottom: 8px;
+}
+
+.stat-card.large .stat-value {
+  font-size: 36px;
 }
 
 .stat-card.success .stat-value {
-  color: #67c23a;
+  color: var(--tech-secondary);
 }
 
 .stat-card.danger .stat-value {
-  color: #f56c6c;
+  color: var(--tech-danger);
 }
 
 .stat-card.primary .stat-value {
-  color: #409eff;
+  color: var(--tech-primary);
 }
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--tech-text-secondary);
   margin-top: 4px;
+  font-weight: 500;
+}
+
+.stat-card.large .stat-label {
+  font-size: 14px;
+  margin-top: 8px;
 }
 
 .log-section {
@@ -2014,10 +2412,48 @@ onMounted(() => {
 .log-section h4 {
   margin: 0 0 10px 0;
   font-size: 14px;
-  color: #303133;
+  font-weight: 600;
+  color: var(--tech-text-primary);
 }
 
 .log-section.error h4 {
-  color: #f56c6c;
+  color: var(--tech-danger);
+}
+
+/* 表格样式美化 */
+.release-page :deep(.el-table) {
+  background: transparent;
+  color: var(--tech-text-primary);
+}
+
+.release-page :deep(.el-table th) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+  font-weight: 600;
+}
+
+.release-page :deep(.el-table td) {
+  border-color: var(--tech-border);
+}
+
+.release-page :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.release-page :deep(.el-table__row:hover) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+/* 按钮样式 */
+.release-page :deep(.el-button--primary) {
+  background-color: var(--tech-primary);
+  border-color: var(--tech-primary);
+  color: #ffffff;
+}
+
+.release-page :deep(.el-button--primary:hover) {
+  background-color: var(--tech-primary-light);
+  border-color: var(--tech-primary-light);
 }
 </style>

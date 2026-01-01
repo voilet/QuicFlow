@@ -1,16 +1,55 @@
 <template>
   <div class="audit-log-container">
-    <div class="header">
+    <!-- 页面头部 -->
+    <div class="page-header">
       <h2>命令审计日志</h2>
-      <div class="stats" v-if="stats">
-        <el-tag type="info">总命令: {{ stats.total_commands }}</el-tag>
-        <el-tag type="success">总会话: {{ stats.total_sessions }}</el-tag>
-        <el-tag type="warning">总客户端: {{ stats.total_clients }}</el-tag>
-      </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-row" v-if="stats">
+      <el-card shadow="hover" class="stat-card">
+        <div class="stat-content">
+          <div class="stat-icon info">
+            <el-icon :size="30"><Document /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ stats.total_commands }}</div>
+            <div class="stat-label">总命令数</div>
+          </div>
+        </div>
+      </el-card>
+      <el-card shadow="hover" class="stat-card">
+        <div class="stat-content">
+          <div class="stat-icon success">
+            <el-icon :size="30"><Connection /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ stats.total_sessions }}</div>
+            <div class="stat-label">总会话数</div>
+          </div>
+        </div>
+      </el-card>
+      <el-card shadow="hover" class="stat-card">
+        <div class="stat-content">
+          <div class="stat-icon warning">
+            <el-icon :size="30"><Monitor /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ stats.total_clients }}</div>
+            <div class="stat-label">总客户端数</div>
+          </div>
+        </div>
+      </el-card>
     </div>
 
     <!-- 过滤条件 -->
-    <el-card class="filter-card">
+    <el-card class="filter-card" shadow="hover">
+      <template #header>
+        <div class="card-header-title">
+          <el-icon><Search /></el-icon>
+          <span>筛选条件</span>
+        </div>
+      </template>
       <el-form :inline="true" :model="filter" class="filter-form">
         <el-form-item label="客户端 ID">
           <el-input v-model="filter.client_id" placeholder="输入客户端 ID" clearable />
@@ -46,48 +85,57 @@
     </el-card>
 
     <!-- 命令列表 -->
-    <el-card class="commands-card">
-      <el-table
-        :data="commands"
-        v-loading="loading"
-        stripe
-        border
-        style="width: 100%"
-        :default-sort="{ prop: 'executed_at', order: 'descending' }"
-      >
-        <el-table-column prop="executed_at" label="执行时间" width="180">
-          <template #default="scope">
-            {{ formatTime(scope.row.executed_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="client_id" label="客户端 ID" width="150" />
-        <el-table-column prop="username" label="用户名" width="100" />
-        <el-table-column prop="command" label="命令" min-width="300">
-          <template #default="scope">
-            <code class="command-text">{{ scope.row.command }}</code>
-          </template>
-        </el-table-column>
-        <el-table-column prop="exit_code" label="退出码" width="80" align="center">
-          <template #default="scope">
-            <el-tag :type="scope.row.exit_code === 0 ? 'success' : 'danger'" size="small">
-              {{ scope.row.exit_code }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="duration_ms" label="耗时" width="100" align="right">
-          <template #default="scope">
-            {{ scope.row.duration_ms ? scope.row.duration_ms + 'ms' : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="remote_ip" label="来源 IP" width="130" />
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default="scope">
-            <el-button size="small" link @click="showDetail(scope.row)">
-              详情
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+    <el-card class="commands-card" shadow="hover">
+      <template #header>
+        <div class="card-header-title">
+          <el-icon><Document /></el-icon>
+          <span>命令列表</span>
+          <el-tag type="info" size="small" class="record-count-tag">
+            {{ total }} 条记录
+          </el-tag>
+        </div>
+      </template>
+      <div class="commands-table-wrapper">
+        <el-table
+          :data="commands"
+          v-loading="loading"
+          stripe
+          class="commands-table"
+          :default-sort="{ prop: 'executed_at', order: 'descending' }"
+          table-layout="auto"
+        >
+          <el-table-column prop="executed_at" label="执行时间" width="180">
+            <template #default="scope">
+              <span class="table-cell-time">{{ formatTime(scope.row.executed_at) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="client_id" label="客户端 ID" width="150">
+            <template #default="scope">
+              <span class="table-cell-text">{{ scope.row.client_id }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="username" label="用户名" width="120">
+            <template #default="scope">
+              <span class="table-cell-text">{{ scope.row.username }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="command" label="命令" min-width="400">
+            <template #default="scope">
+              <code class="command-text">{{ scope.row.command }}</code>
+            </template>
+          </el-table-column>
+          <el-table-column prop="remote_ip" label="来源 IP" width="140">
+            <template #default="scope">
+              <span class="table-cell-text">{{ scope.row.remote_ip }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="scope">
+              <el-button size="small" @click="showDetail(scope.row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
 
       <!-- 分页 -->
       <el-pagination
@@ -103,20 +151,25 @@
     </el-card>
 
     <!-- 详情对话框 -->
-    <el-dialog v-model="detailVisible" title="命令详情" width="600px">
-      <el-descriptions :column="1" border v-if="selectedCommand">
+    <el-dialog 
+      v-model="detailVisible" 
+      title="命令详情" 
+      width="700px"
+      class="detail-dialog"
+    >
+      <el-descriptions :column="1" border v-if="selectedCommand" class="command-descriptions">
         <el-descriptions-item label="ID">{{ selectedCommand.id }}</el-descriptions-item>
         <el-descriptions-item label="会话 ID">{{ selectedCommand.session_id }}</el-descriptions-item>
         <el-descriptions-item label="客户端 ID">{{ selectedCommand.client_id }}</el-descriptions-item>
         <el-descriptions-item label="用户名">{{ selectedCommand.username }}</el-descriptions-item>
         <el-descriptions-item label="执行时间">{{ formatTime(selectedCommand.executed_at) }}</el-descriptions-item>
         <el-descriptions-item label="来源 IP">{{ selectedCommand.remote_ip }}</el-descriptions-item>
-        <el-descriptions-item label="退出码">
+        <!-- <el-descriptions-item label="退出码">
           <el-tag :type="selectedCommand.exit_code === 0 ? 'success' : 'danger'">
             {{ selectedCommand.exit_code }}
           </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="耗时">{{ selectedCommand.duration_ms }}ms</el-descriptions-item>
+        </el-descriptions-item> -->
+        <!-- <el-descriptions-item label="耗时">{{ selectedCommand.duration_ms }}ms</el-descriptions-item> -->
         <el-descriptions-item label="命令">
           <code class="command-detail">{{ selectedCommand.command }}</code>
         </el-descriptions-item>
@@ -128,7 +181,7 @@
 <script setup>
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Download } from '@element-plus/icons-vue'
+import { Search, Download, Document, Connection, Monitor } from '@element-plus/icons-vue'
 import api, { request } from '../api'
 
 const loading = ref(false)
@@ -245,62 +298,350 @@ onMounted(() => {
 
 <style scoped>
 .audit-log-container {
-  padding: 20px;
+  padding: 0;
 }
 
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.page-header {
+  margin-bottom: 20px;
+  padding: 0 4px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--tech-primary);
+  letter-spacing: -0.02em;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
   margin-bottom: 20px;
 }
 
-.header h2 {
-  margin: 0;
+.stat-card {
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--tech-shadow-sm);
 }
 
-.stats {
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(64, 158, 255, 0.08),
+    transparent
+  );
+  transition: left 0.6s ease;
+}
+
+.stat-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--tech-gradient-primary);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(64, 158, 255, 0.4);
+  box-shadow: var(--tech-shadow-md);
+}
+
+.stat-card:hover::before {
+  left: 100%;
+}
+
+.stat-card:hover::after {
+  transform: scaleX(1);
+}
+
+.stat-content {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.stat-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-icon.info {
+  background: linear-gradient(135deg, rgba(144, 147, 153, 0.15) 0%, rgba(144, 147, 153, 0.08) 100%);
+  border: 1px solid rgba(144, 147, 153, 0.3);
+  color: var(--tech-info);
+  box-shadow: 0 4px 12px rgba(144, 147, 153, 0.2);
+}
+
+.stat-icon.success {
+  background: linear-gradient(135deg, rgba(103, 194, 58, 0.15) 0%, rgba(103, 194, 58, 0.08) 100%);
+  border: 1px solid rgba(103, 194, 58, 0.3);
+  color: var(--tech-secondary);
+  box-shadow: 0 4px 12px rgba(103, 194, 58, 0.2);
+}
+
+.stat-icon.warning {
+  background: linear-gradient(135deg, rgba(230, 162, 60, 0.15) 0%, rgba(230, 162, 60, 0.08) 100%);
+  border: 1px solid rgba(230, 162, 60, 0.3);
+  color: var(--tech-warning);
+  box-shadow: 0 4px 12px rgba(230, 162, 60, 0.2);
+}
+
+.stat-info {
+  flex: 1;
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--tech-primary);
+  margin-bottom: 6px;
+  line-height: 1.2;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stat-card:hover .stat-value {
+  transform: scale(1.05);
+  color: var(--tech-primary-light);
+}
+
+.stat-label {
+  font-size: 14px;
+  color: var(--tech-text-secondary);
+  font-weight: 500;
 }
 
 .filter-card {
   margin-bottom: 20px;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+}
+
+.filter-card :deep(.el-card__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 15px 20px;
+}
+
+.card-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.card-header-title .el-icon {
+  color: var(--tech-primary);
 }
 
 .filter-form {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 16px;
+  align-items: flex-end;
 }
 
 .commands-card {
   margin-bottom: 20px;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+}
+
+.commands-card :deep(.el-card__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 15px 20px;
+}
+
+.record-count-tag {
+  margin-left: auto;
+}
+
+.commands-table-wrapper {
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.commands-table {
+  background: transparent;
+}
+
+.commands-table :deep(.el-table__header-wrapper) {
+  background: transparent;
+}
+
+.commands-table :deep(.el-table__header) {
+  background: transparent;
+}
+
+.commands-table :deep(.el-table th) {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+  font-weight: 600;
+  padding: 12px;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.commands-table :deep(.el-table th:hover) {
+  background-color: var(--tech-bg-tertiary);
+  color: var(--tech-text-primary);
+}
+
+.commands-table :deep(.el-table td) {
+  border-color: var(--tech-border);
+  padding: 12px;
+  transition: all 0.2s ease;
+}
+
+.commands-table :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.commands-table :deep(.el-table__row) {
+  transition: all 0.2s ease;
+}
+
+.commands-table :deep(.el-table__row:hover) {
+  background-color: var(--tech-bg-tertiary);
+}
+
+.commands-table :deep(.el-table__row:hover td) {
+  border-color: var(--tech-border);
+  color: var(--tech-text-primary);
+}
+
+.table-cell-text {
+  color: var(--tech-text-primary);
+  font-size: 14px;
+}
+
+.table-cell-time {
+  color: var(--tech-text-secondary);
+  font-size: 13px;
+  font-family: var(--tech-font-mono);
 }
 
 .command-text {
-  background-color: #f5f5f5;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: var(--tech-font-mono);
   font-size: 13px;
   word-break: break-all;
-}
-
-.command-detail {
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  padding: 10px;
-  border-radius: 4px;
-  display: block;
-  font-family: 'Consolas', 'Monaco', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
+  color: var(--tech-text-primary);
 }
 
 .pagination {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+  padding: 0 4px;
+}
+
+.pagination :deep(.el-pagination .el-pager li.is-active) {
+  background-color: var(--tech-primary);
+  border-color: var(--tech-primary);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* 对话框美化 */
+.detail-dialog :deep(.el-dialog) {
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+}
+
+.detail-dialog :deep(.el-dialog__header) {
+  background: var(--tech-bg-tertiary);
+  border-bottom: 1px solid var(--tech-border);
+  padding: 20px;
+}
+
+.detail-dialog :deep(.el-dialog__title) {
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.command-descriptions {
+  margin-top: 20px;
+}
+
+.command-descriptions :deep(.el-descriptions__label) {
+  font-weight: 600;
+  color: var(--tech-text-secondary);
+}
+
+.command-descriptions :deep(.el-descriptions__content) {
+  color: var(--tech-text-primary);
+}
+
+.command-detail {
+  background-color: var(--tech-bg-primary);
+  color: var(--tech-text-primary);
+  padding: 12px;
+  border-radius: 4px;
+  display: block;
+  font-family: var(--tech-font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid var(--tech-border);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+[data-theme="dark"] .command-detail {
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/* 响应式设计 */
+@media (max-width: 1200px) {
+  .stats-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .filter-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .filter-form .el-form-item {
+    margin-bottom: 0;
+  }
 }
 </style>

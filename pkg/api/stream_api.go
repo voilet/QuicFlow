@@ -87,7 +87,7 @@ func (h *HTTPServer) handleStreamMultiCommand(c *gin.Context) {
 
 	startTime := time.Now()
 	total := len(req.ClientIDs)
-	
+
 	// 使用 SendCommandToMultiple 来获取 task_id 并支持取消
 	// 在 goroutine 中执行，通过 channel 接收结果
 	resultChan := make(chan *command.ClientCommandResult, total)
@@ -103,7 +103,7 @@ func (h *HTTPServer) handleStreamMultiCommand(c *gin.Context) {
 		// 将结果发送到通道
 		for _, result := range response.Results {
 			resultChan <- result
-		}
+	}
 		close(resultChan)
 	}()
 
