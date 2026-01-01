@@ -67,3 +67,11 @@ mem.out
 docs/_build/
 site/
 /server
+
+# Data files (audit logs, recordings, database)
+data/
+*.db
+
+# Frontend dependencies
+web/node_modules/
+web/dist/
