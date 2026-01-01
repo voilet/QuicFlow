@@ -75,3 +75,5 @@ data/
 # Frontend dependencies
 web/node_modules/
 web/dist/
+hd.json
+client
