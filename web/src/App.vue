@@ -1,5 +1,9 @@
 <template>
-  <el-container class="app-container">
+  <!-- 初始化引导页面（无布局） -->
+  <router-view v-if="$route.meta.hideLayout" />
+
+  <!-- 主应用布局 -->
+  <el-container v-else class="app-container">
     <!-- 侧边栏 -->
     <el-aside width="200px" class="app-aside">
       <div class="logo">
@@ -34,6 +38,14 @@
           <el-icon><VideoCamera /></el-icon>
           <span>会话录像</span>
         </el-menu-item>
+        <el-menu-item index="/release">
+          <el-icon><Upload /></el-icon>
+          <span>发布管理</span>
+        </el-menu-item>
+        <el-menu-item index="/setup" class="setup-menu-item">
+          <el-icon><Setting /></el-icon>
+          <span>数据库设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -44,9 +56,9 @@
         <div class="header-content">
           <span class="header-title">{{ pageTitle }}</span>
           <div class="header-actions">
-            <el-tag type="success">
-              <el-icon><Connection /></el-icon>
-              服务器已连接
+            <el-tag :type="dbStatus.type">
+              <el-icon><component :is="dbStatus.icon" /></el-icon>
+              {{ dbStatus.text }}
             </el-tag>
           </div>
         </div>
@@ -65,10 +77,14 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { request } from '@/api'
 
 const route = useRoute()
+
+// 数据库状态
+const dbInitialized = ref(null) // null=检查中, true=已初始化, false=未初始化
 
 const pageTitle = computed(() => {
   const titles = {
@@ -77,9 +93,37 @@ const pageTitle = computed(() => {
     '/history': '命令历史',
     '/terminal': 'SSH 终端',
     '/audit': '命令审计',
-    '/recordings': '会话录像'
+    '/recordings': '会话录像',
+    '/release': '发布管理',
+    '/setup': '数据库设置'
   }
   return titles[route.path] || 'QUIC 命令管理系统'
+})
+
+const dbStatus = computed(() => {
+  if (dbInitialized.value === null) {
+    return { type: 'info', text: '检查中...', icon: 'Loading' }
+  } else if (dbInitialized.value) {
+    return { type: 'success', text: '数据库已连接', icon: 'Connection' }
+  } else {
+    return { type: 'warning', text: '数据库未配置', icon: 'WarningFilled' }
+  }
+})
+
+// 检查数据库状态
+async function checkDatabaseStatus() {
+  try {
+    const res = await request.get('/setup/status')
+    if (res.success) {
+      dbInitialized.value = res.status.initialized
+    }
+  } catch (e) {
+    dbInitialized.value = false
+  }
+}
+
+onMounted(() => {
+  checkDatabaseStatus()
 })
 </script>
 

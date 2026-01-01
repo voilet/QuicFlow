@@ -52,6 +52,14 @@ const (
 
 	// 简化的磁盘 IOPS 检测
 	CmdDiskIOPS = "disk.iops" // 简化的磁盘 IOPS 检测（只返回 Read/Write IOPS）
+
+	// 发布系统命令
+	CmdReleaseExecute   = "release.execute"   // 执行发布任务（脚本部署）
+	CmdReleaseStatus    = "release.status"    // 上报发布状态
+	CmdReleaseCheck     = "release.check"     // 检查安装状态
+	CmdContainerDeploy  = "container.deploy"  // 容器部署
+	CmdGitPullDeploy    = "gitpull.deploy"    // Git 拉取部署
+	CmdGitVersions      = "git.versions"      // 获取 Git 仓库版本信息
 )
 
 // ============================================================================
@@ -537,4 +545,288 @@ type DiskIOPSResponse struct {
 	TotalDisks int               `json:"total_disks"`           // 测试磁盘总数
 	TestedAt   string            `json:"tested_at"`             // 测试时间
 	Message    string            `json:"message,omitempty"`     // 消息
+}
+
+// ============================================================================
+// 发布系统相关结构
+// ============================================================================
+
+// ReleaseOperationType 发布操作类型
+type ReleaseOperationType string
+
+const (
+	ReleaseOpDeploy    ReleaseOperationType = "deploy"    // 部署（自动判断安装/更新）
+	ReleaseOpInstall   ReleaseOperationType = "install"   // 强制安装
+	ReleaseOpUpdate    ReleaseOperationType = "update"    // 强制更新
+	ReleaseOpRollback  ReleaseOperationType = "rollback"  // 回滚
+	ReleaseOpUninstall ReleaseOperationType = "uninstall" // 卸载
+)
+
+// ReleaseExecuteParams release.execute 命令的参数
+type ReleaseExecuteParams struct {
+	ReleaseID   string               `json:"release_id"`            // 发布ID
+	TargetID    string               `json:"target_id"`             // 目标ID
+	Operation   ReleaseOperationType `json:"operation"`             // 操作类型
+	Version     string               `json:"version"`               // 版本号
+	Script      string               `json:"script"`                // 脚本内容（已解析变量）
+	WorkDir     string               `json:"work_dir,omitempty"`    // 工作目录
+	Environment map[string]string    `json:"environment,omitempty"` // 环境变量
+	Timeout     int                  `json:"timeout,omitempty"`     // 超时时间（秒）
+	Interpreter string               `json:"interpreter,omitempty"` // 脚本解释器（默认 /bin/bash）
+}
+
+// ReleaseExecuteResult release.execute 命令的结果
+type ReleaseExecuteResult struct {
+	Success    bool   `json:"success"`              // 是否成功
+	ReleaseID  string `json:"release_id"`           // 发布ID
+	TargetID   string `json:"target_id"`            // 目标ID
+	Operation  string `json:"operation"`            // 操作类型
+	ExitCode   int    `json:"exit_code"`            // 退出码
+	Output     string `json:"output"`               // 标准输出
+	Error      string `json:"error,omitempty"`      // 错误信息
+	StartedAt  string `json:"started_at"`           // 开始时间
+	FinishedAt string `json:"finished_at"`          // 完成时间
+	Duration   int64  `json:"duration_ms"`          // 耗时（毫秒）
+}
+
+// ReleaseStatusParams release.status 命令的参数（状态上报）
+type ReleaseStatusParams struct {
+	ReleaseID   string `json:"release_id"`             // 发布ID
+	TargetID    string `json:"target_id"`              // 目标ID
+	Status      string `json:"status"`                 // 状态（running/success/failed）
+	Progress    int    `json:"progress,omitempty"`     // 进度百分比（0-100）
+	Message     string `json:"message,omitempty"`      // 状态消息
+	Output      string `json:"output,omitempty"`       // 输出内容
+	Error       string `json:"error,omitempty"`        // 错误信息
+	Version     string `json:"version,omitempty"`      // 当前版本
+	ReportedAt  string `json:"reported_at"`            // 上报时间
+}
+
+// ReleaseStatusResult release.status 命令的响应
+type ReleaseStatusResult struct {
+	Success bool   `json:"success"`          // 是否成功接收
+	Message string `json:"message,omitempty"` // 响应消息
+}
+
+// ReleaseCheckParams release.check 命令的参数
+type ReleaseCheckParams struct {
+	WorkDir string `json:"work_dir"` // 工作目录
+}
+
+// ReleaseCheckResult release.check 命令的结果
+type ReleaseCheckResult struct {
+	Installed      bool   `json:"installed"`                 // 是否已安装
+	Version        string `json:"version,omitempty"`         // 当前版本
+	InstallPath    string `json:"install_path,omitempty"`    // 安装路径
+	InstalledAt    string `json:"installed_at,omitempty"`    // 安装时间
+	LastUpdatedAt  string `json:"last_updated_at,omitempty"` // 最后更新时间
+	Error          string `json:"error,omitempty"`           // 错误信息
+}
+
+// ============================================================================
+// 容器部署相关结构
+// ============================================================================
+
+// ContainerDeployParams container.deploy 命令的参数
+type ContainerDeployParams struct {
+	ReleaseID   string               `json:"release_id"`             // 发布ID
+	TargetID    string               `json:"target_id"`              // 目标ID
+	Operation   ReleaseOperationType `json:"operation"`              // 操作类型
+	Version     string               `json:"version"`                // 版本号
+
+	// 镜像配置
+	Image            string `json:"image"`                         // 镜像地址
+	Registry         string `json:"registry,omitempty"`            // 镜像仓库
+	RegistryUser     string `json:"registry_user,omitempty"`       // 仓库用户
+	RegistryPass     string `json:"registry_pass,omitempty"`       // 仓库密码
+	ImagePullPolicy  string `json:"image_pull_policy,omitempty"`   // 拉取策略
+
+	// 容器配置
+	ContainerName string            `json:"container_name"`            // 容器名称
+	Ports         []PortMappingCmd  `json:"ports,omitempty"`           // 端口映射
+	Volumes       []VolumeMountCmd  `json:"volumes,omitempty"`         // 卷挂载
+	Environment   map[string]string `json:"environment,omitempty"`     // 环境变量
+	Networks      []string          `json:"networks,omitempty"`        // 网络
+	RestartPolicy string            `json:"restart_policy,omitempty"`  // 重启策略
+	Command       []string          `json:"command,omitempty"`         // 启动命令
+	Entrypoint    []string          `json:"entrypoint,omitempty"`      // 入口点
+
+	// 资源限制
+	MemoryLimit   string `json:"memory_limit,omitempty"`
+	CPULimit      string `json:"cpu_limit,omitempty"`
+
+	// 健康检查
+	HealthCheck *ContainerHealthCheckCmd `json:"health_check,omitempty"`
+
+	// 部署选项
+	StopTimeout    int  `json:"stop_timeout,omitempty"`     // 停止超时
+	RemoveOld      bool `json:"remove_old,omitempty"`       // 移除旧容器
+	PullBeforeStop bool `json:"pull_before_stop,omitempty"` // 先拉取再停止
+	Timeout        int  `json:"timeout,omitempty"`          // 总超时时间
+}
+
+// PortMappingCmd 端口映射命令结构
+type PortMappingCmd struct {
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol,omitempty"`
+	HostIP        string `json:"host_ip,omitempty"`
+}
+
+// VolumeMountCmd 卷挂载命令结构
+type VolumeMountCmd struct {
+	HostPath      string `json:"host_path"`
+	ContainerPath string `json:"container_path"`
+	ReadOnly      bool   `json:"read_only,omitempty"`
+}
+
+// ContainerHealthCheckCmd 容器健康检查命令结构
+type ContainerHealthCheckCmd struct {
+	Command     []string `json:"command"`
+	Interval    int      `json:"interval,omitempty"`
+	Timeout     int      `json:"timeout,omitempty"`
+	Retries     int      `json:"retries,omitempty"`
+	StartPeriod int      `json:"start_period,omitempty"`
+}
+
+// ContainerDeployResult container.deploy 命令的结果
+type ContainerDeployResult struct {
+	Success       bool   `json:"success"`                    // 是否成功
+	ReleaseID     string `json:"release_id"`                 // 发布ID
+	TargetID      string `json:"target_id"`                  // 目标ID
+	Operation     string `json:"operation"`                  // 操作类型
+	ContainerID   string `json:"container_id,omitempty"`     // 新容器ID
+	ContainerName string `json:"container_name,omitempty"`   // 容器名称
+	ImagePulled   bool   `json:"image_pulled"`               // 是否拉取了镜像
+	OldRemoved    bool   `json:"old_removed"`                // 旧容器是否已移除
+	Output        string `json:"output,omitempty"`           // 输出信息
+	Error         string `json:"error,omitempty"`            // 错误信息
+	StartedAt     string `json:"started_at"`                 // 开始时间
+	FinishedAt    string `json:"finished_at"`                // 完成时间
+	Duration      int64  `json:"duration_ms"`                // 耗时（毫秒）
+}
+
+// ============================================================================
+// Git 拉取部署相关结构
+// ============================================================================
+
+// GitPullDeployParams gitpull.deploy 命令的参数
+type GitPullDeployParams struct {
+	ReleaseID   string               `json:"release_id"`             // 发布ID
+	TargetID    string               `json:"target_id"`              // 目标ID
+	Operation   ReleaseOperationType `json:"operation"`              // 操作类型
+	Version     string               `json:"version"`                // 版本号
+
+	// Git 仓库配置
+	RepoURL    string `json:"repo_url"`               // 仓库地址
+	Branch     string `json:"branch,omitempty"`       // 分支
+	Tag        string `json:"tag,omitempty"`          // 标签
+	Commit     string `json:"commit,omitempty"`       // 指定 commit
+	Depth      int    `json:"depth,omitempty"`        // 克隆深度
+	Submodules bool   `json:"submodules,omitempty"`   // 初始化子模块
+
+	// 认证配置
+	AuthType string `json:"auth_type,omitempty"` // none, ssh, token, basic
+	SSHKey   string `json:"ssh_key,omitempty"`   // SSH 私钥
+	Token    string `json:"token,omitempty"`     // Access Token
+	Username string `json:"username,omitempty"`  // 用户名
+	Password string `json:"password,omitempty"`  // 密码
+
+	// 部署配置
+	WorkDir      string `json:"work_dir"`                // 工作目录
+	CleanBefore  bool   `json:"clean_before,omitempty"`  // 部署前清理
+	BackupBefore bool   `json:"backup_before,omitempty"` // 部署前备份
+	BackupDir    string `json:"backup_dir,omitempty"`    // 备份目录
+
+	// 部署脚本
+	PreScript     string            `json:"pre_script,omitempty"`     // 部署前脚本
+	PostScript    string            `json:"post_script,omitempty"`    // 部署后脚本
+	Environment   map[string]string `json:"environment,omitempty"`    // 环境变量
+	Interpreter   string            `json:"interpreter,omitempty"`    // 脚本解释器
+
+	// 超时配置
+	CloneTimeout  int `json:"clone_timeout,omitempty"`  // 克隆超时
+	ScriptTimeout int `json:"script_timeout,omitempty"` // 脚本超时
+	Timeout       int `json:"timeout,omitempty"`        // 总超时时间
+}
+
+// GitPullDeployResult gitpull.deploy 命令的结果
+type GitPullDeployResult struct {
+	Success       bool   `json:"success"`                  // 是否成功
+	ReleaseID     string `json:"release_id"`               // 发布ID
+	TargetID      string `json:"target_id"`                // 目标ID
+	Operation     string `json:"operation"`                // 操作类型
+	GitOutput     string `json:"git_output,omitempty"`     // Git 命令输出
+	ScriptOutput  string `json:"script_output,omitempty"`  // 脚本输出
+	Commit        string `json:"commit,omitempty"`         // 当前 commit hash
+	Branch        string `json:"branch,omitempty"`         // 当前分支
+	BackupPath    string `json:"backup_path,omitempty"`    // 备份路径
+	CleanedBefore bool   `json:"cleaned_before"`           // 是否清理过
+	BackedUpBefore bool  `json:"backed_up_before"`         // 是否备份过
+	Error         string `json:"error,omitempty"`          // 错误信息
+	StartedAt     string `json:"started_at"`               // 开始时间
+	FinishedAt    string `json:"finished_at"`              // 完成时间
+	Duration      int64  `json:"duration_ms"`              // 耗时（毫秒）
+}
+
+// ============================================================================
+// Git 版本信息相关结构
+// ============================================================================
+
+// GitVersionsParams git.versions 命令的参数
+type GitVersionsParams struct {
+	// Git 仓库配置
+	RepoURL  string `json:"repo_url"`            // 仓库地址
+	WorkDir  string `json:"work_dir,omitempty"`  // 工作目录（如果已 clone）
+
+	// 认证配置
+	AuthType string `json:"auth_type,omitempty"` // none, ssh, token, basic
+	SSHKey   string `json:"ssh_key,omitempty"`   // SSH 私钥
+	Token    string `json:"token,omitempty"`     // Access Token
+	Username string `json:"username,omitempty"`  // 用户名
+	Password string `json:"password,omitempty"`  // 密码
+
+	// 查询选项
+	MaxTags    int  `json:"max_tags,omitempty"`    // 最大返回 tag 数量，默认 20
+	MaxCommits int  `json:"max_commits,omitempty"` // 最大返回 commit 数量，默认 10
+	IncludeBranches bool `json:"include_branches,omitempty"` // 是否包含分支列表
+}
+
+// GitTag Git 标签信息
+type GitTag struct {
+	Name      string `json:"name"`                 // 标签名
+	Commit    string `json:"commit"`               // 对应的 commit hash
+	Message   string `json:"message,omitempty"`    // 标签消息（annotated tag）
+	CreatedAt string `json:"created_at,omitempty"` // 创建时间
+}
+
+// GitBranch Git 分支信息
+type GitBranch struct {
+	Name      string `json:"name"`                 // 分支名
+	Commit    string `json:"commit"`               // 最新 commit hash
+	IsDefault bool   `json:"is_default,omitempty"` // 是否为默认分支
+	IsRemote  bool   `json:"is_remote,omitempty"`  // 是否为远程分支
+}
+
+// GitCommit Git 提交信息
+type GitCommit struct {
+	Hash      string `json:"hash"`                 // commit hash (短)
+	FullHash  string `json:"full_hash"`            // commit hash (完整)
+	Author    string `json:"author"`               // 作者
+	Email     string `json:"email,omitempty"`      // 作者邮箱
+	Message   string `json:"message"`              // 提交消息
+	CreatedAt string `json:"created_at"`           // 提交时间
+}
+
+// GitVersionsResult git.versions 命令的结果
+type GitVersionsResult struct {
+	Success       bool        `json:"success"`                  // 是否成功
+	RepoURL       string      `json:"repo_url"`                 // 仓库地址
+	DefaultBranch string      `json:"default_branch,omitempty"` // 默认分支
+	Tags          []GitTag    `json:"tags,omitempty"`           // 标签列表（按时间倒序）
+	Branches      []GitBranch `json:"branches,omitempty"`       // 分支列表
+	RecentCommits []GitCommit `json:"recent_commits,omitempty"` // 最近提交列表
+	CurrentCommit string      `json:"current_commit,omitempty"` // 当前 commit（如果已 clone）
+	CurrentBranch string      `json:"current_branch,omitempty"` // 当前分支（如果已 clone）
+	Error         string      `json:"error,omitempty"`          // 错误信息
 }

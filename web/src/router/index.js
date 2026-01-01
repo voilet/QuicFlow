@@ -2,6 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/setup',
+    name: 'Setup',
+    component: () => import('@/views/Setup.vue'),
+    meta: { title: '初始化向导', hideLayout: true }
+  },
+  {
     path: '/',
     name: 'ClientList',
     component: () => import('@/views/ClientList.vue')
@@ -33,6 +39,12 @@ const routes = [
     name: 'Recordings',
     component: () => import('@/views/Recordings.vue'),
     meta: { title: '会话录像' }
+  },
+  {
+    path: '/release',
+    name: 'Release',
+    component: () => import('@/views/Release.vue'),
+    meta: { title: '发布管理' }
   }
 ]
 

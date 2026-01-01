@@ -30,6 +30,9 @@ type ServerConfig struct {
 	// 批量执行配置
 	Batch BatchSettings `mapstructure:"batch"`
 
+	// 数据库配置
+	Database DatabaseSettings `mapstructure:"database"`
+
 	// 日志配置
 	Log LogSettings `mapstructure:"log"`
 }
@@ -126,6 +129,26 @@ type LogSettings struct {
 	File string `mapstructure:"file"`
 }
 
+// DatabaseSettings 数据库设置
+type DatabaseSettings struct {
+	// 是否启用数据库
+	Enabled bool `mapstructure:"enabled"`
+	// 数据库主机
+	Host string `mapstructure:"host"`
+	// 数据库端口
+	Port int `mapstructure:"port"`
+	// 数据库用户名
+	User string `mapstructure:"user"`
+	// 数据库密码
+	Password string `mapstructure:"password"`
+	// 数据库名称
+	DBName string `mapstructure:"dbname"`
+	// SSL 模式: disable, require, verify-ca, verify-full
+	SSLMode string `mapstructure:"sslmode"`
+	// 是否自动迁移表结构
+	AutoMigrate bool `mapstructure:"auto_migrate"`
+}
+
 // DefaultConfig 返回默认配置
 func DefaultConfig() *ServerConfig {
 	return &ServerConfig{
@@ -174,6 +197,16 @@ func DefaultConfig() *ServerConfig {
 			Level:  "info",
 			Format: "text",
 			File:   "",
+		},
+		Database: DatabaseSettings{
+			Enabled:     true,
+			Host:        "localhost",
+			Port:        5432,
+			User:        "postgres",
+			Password:    "postgres",
+			DBName:      "quic_release",
+			SSLMode:     "disable",
+			AutoMigrate: true,
 		},
 	}
 }
@@ -323,6 +356,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.level", defaults.Log.Level)
 	v.SetDefault("log.format", defaults.Log.Format)
 	v.SetDefault("log.file", defaults.Log.File)
+
+	// Database
+	v.SetDefault("database.enabled", defaults.Database.Enabled)
+	v.SetDefault("database.host", defaults.Database.Host)
+	v.SetDefault("database.port", defaults.Database.Port)
+	v.SetDefault("database.user", defaults.Database.User)
+	v.SetDefault("database.password", defaults.Database.Password)
+	v.SetDefault("database.dbname", defaults.Database.DBName)
+	v.SetDefault("database.sslmode", defaults.Database.SSLMode)
+	v.SetDefault("database.auto_migrate", defaults.Database.AutoMigrate)
 }
 
 // GenerateDefaultConfig 生成默认配置文件
@@ -357,6 +400,7 @@ func GenerateConfig(path string, cfg *ServerConfig) error {
 	v.Set("session", cfg.Session)
 	v.Set("message", cfg.Message)
 	v.Set("batch", cfg.Batch)
+	v.Set("database", cfg.Database)
 	v.Set("log", cfg.Log)
 
 	// 写入文件

@@ -58,6 +58,22 @@ func SetupClientRouter(logger *monitoring.Logger) *router.Router {
 	// config.update - 更新配置
 	r.Register(command.CmdConfigUpdate, handleConfigUpdate)
 
+	// ========================================
+	// 注册发布系统命令处理器
+	// ========================================
+
+	// release.execute - 执行发布任务
+	r.Register(command.CmdReleaseExecute, handlers.ReleaseExecute)
+
+	// release.check - 检查安装状态
+	r.Register(command.CmdReleaseCheck, handlers.ReleaseCheck)
+
+	// gitpull.deploy - Git 拉取部署
+	r.Register(command.CmdGitPullDeploy, handlers.GitPullDeploy)
+
+	// git.versions - 获取 Git 版本信息
+	r.Register(command.CmdGitVersions, handlers.GitVersions)
+
 	logger.Info("✅ Client router initialized", "commands", r.ListCommands())
 
 	return r

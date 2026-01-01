@@ -1,0 +1,2088 @@
+package api
+
+import (
+	"net/http"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/voilet/quic-flow/pkg/release/engine"
+	"github.com/voilet/quic-flow/pkg/release/executor"
+	"github.com/voilet/quic-flow/pkg/release/models"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+// ReleaseAPI 发布系统 API
+type ReleaseAPI struct {
+	db     *gorm.DB
+	engine *engine.Engine
+}
+
+// NewReleaseAPI 创建发布系统 API
+func NewReleaseAPI(db *gorm.DB) *ReleaseAPI {
+	return &ReleaseAPI{
+		db:     db,
+		engine: engine.NewEngine(db),
+	}
+}
+
+// NewReleaseAPIWithRemote 创建支持远程执行的发布系统 API
+func NewReleaseAPIWithRemote(db *gorm.DB, cmdSender executor.CommandSender) *ReleaseAPI {
+	return &ReleaseAPI{
+		db:     db,
+		engine: engine.NewEngineWithRemote(db, cmdSender),
+	}
+}
+
+// SetRemoteExecutor 设置远程执行器
+func (api *ReleaseAPI) SetRemoteExecutor(cmdSender executor.CommandSender) {
+	api.engine.SetRemoteExecutor(cmdSender)
+}
+
+// SetDB 设置数据库连接（用于运行时更新）
+func (api *ReleaseAPI) SetDB(db *gorm.DB) {
+	api.db = db
+	api.engine = engine.NewEngine(db)
+}
+
+// checkDB 检查数据库是否配置
+func (api *ReleaseAPI) checkDB(c *gin.Context) bool {
+	if api.db == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"error":   "Database not configured. Release system requires database setup.",
+		})
+		return false
+	}
+	return true
+}
+
+// RegisterRoutes 注册路由
+func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
+	release := r.Group("/release")
+	{
+		// 项目管理
+		release.POST("/projects", api.CreateProject)
+		release.GET("/projects", api.ListProjects)
+		release.GET("/projects/:id", api.GetProject)
+		release.PUT("/projects/:id", api.UpdateProject)
+		release.DELETE("/projects/:id", api.DeleteProject)
+
+		// 环境管理
+		release.POST("/projects/:id/environments", api.CreateEnvironment)
+		release.GET("/projects/:id/environments", api.ListEnvironments)
+		release.GET("/environments/:id", api.GetEnvironment)
+		release.PUT("/environments/:id", api.UpdateEnvironment)
+		release.DELETE("/environments/:id", api.DeleteEnvironment)
+
+		// 目标管理
+		release.POST("/environments/:id/targets", api.CreateTarget)
+		release.GET("/environments/:id/targets", api.ListTargets)
+		release.GET("/targets/:id", api.GetTarget)
+		release.PUT("/targets/:id", api.UpdateTarget)
+		release.DELETE("/targets/:id", api.DeleteTarget)
+
+		// 流水线管理
+		release.POST("/projects/:id/pipelines", api.CreatePipeline)
+		release.GET("/projects/:id/pipelines", api.ListPipelines)
+		release.GET("/pipelines/:id", api.GetPipeline)
+		release.PUT("/pipelines/:id", api.UpdatePipeline)
+		release.DELETE("/pipelines/:id", api.DeletePipeline)
+
+		// 变量管理
+		release.POST("/variables", api.CreateVariable)
+		release.GET("/projects/:id/variables", api.ListProjectVariables)
+		release.GET("/environments/:id/variables", api.ListEnvVariables)
+		release.PUT("/variables/:id", api.UpdateVariable)
+		release.DELETE("/variables/:id", api.DeleteVariable)
+
+		// 版本管理
+		release.POST("/projects/:id/versions", api.CreateVersion)
+		release.GET("/projects/:id/versions", api.ListVersions)
+		release.GET("/versions/:id", api.GetVersion)
+		release.PUT("/versions/:id", api.UpdateVersion)
+		release.DELETE("/versions/:id", api.DeleteVersion)
+
+		// 部署任务管理
+		release.POST("/tasks", api.CreateDeployTask)
+		release.GET("/projects/:id/tasks", api.ListDeployTasks)
+		release.GET("/tasks/:id", api.GetDeployTask)
+		release.POST("/tasks/:id/start", api.StartDeployTask)
+		release.POST("/tasks/:id/cancel", api.CancelDeployTask)
+		release.POST("/tasks/:id/pause", api.PauseDeployTask)
+		release.POST("/tasks/:id/promote", api.PromoteDeployTask)
+		release.POST("/tasks/:id/rollback", api.RollbackDeployTask)
+
+		// 发布管理
+		release.POST("/deploys", api.CreateRelease)
+		release.GET("/deploys", api.ListReleases)
+		release.GET("/deploys/:id", api.GetRelease)
+		release.POST("/deploys/:id/start", api.StartRelease)
+		release.POST("/deploys/:id/cancel", api.CancelRelease)
+		release.POST("/deploys/:id/rollback", api.RollbackRelease)
+		release.POST("/deploys/:id/promote", api.PromoteRelease)
+
+		// 操作类型
+		release.POST("/install", api.InstallService)
+		release.POST("/update", api.UpdateService)
+		release.POST("/uninstall", api.UninstallService)
+
+		// 审批管理
+		release.GET("/approvals", api.ListApprovals)
+		release.POST("/approvals/:id/approve", api.ApproveRelease)
+		release.POST("/approvals/:id/reject", api.RejectRelease)
+
+		// 部署日志
+		release.GET("/logs", api.ListDeployLogs)
+		release.GET("/logs/:id", api.GetDeployLog)
+		release.GET("/projects/:id/logs", api.ListProjectDeployLogs)
+		release.GET("/projects/:id/stats", api.GetProjectDeployStats)
+		release.GET("/stats", api.GetDeployStats)
+
+		// 脚本验证
+		release.POST("/validate-script", api.ValidateScript)
+
+		// Git 版本查询
+		release.POST("/git-versions", api.GetGitVersions)
+	}
+}
+
+// ==================== 项目管理 ====================
+
+// CreateProject 创建项目
+func (api *ReleaseAPI) CreateProject(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	var req struct {
+		Name            string                        `json:"name" binding:"required"`
+		Description     string                        `json:"description"`
+		Type            models.DeployType             `json:"type" binding:"required"`
+		RepoURL         string                        `json:"repo_url"`
+		RepoType        string                        `json:"repo_type"`
+		ScriptConfig    *models.ScriptDeployConfig    `json:"script_config"`
+		GitPullConfig   *models.GitPullDeployConfig   `json:"gitpull_config"`
+		ContainerConfig *models.ContainerDeployConfig `json:"container_config"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	project := &models.Project{
+		Name:            req.Name,
+		Description:     req.Description,
+		Type:            req.Type,
+		RepoURL:         req.RepoURL,
+		RepoType:        req.RepoType,
+		ScriptConfig:    req.ScriptConfig,
+		GitPullConfig:   req.GitPullConfig,
+		ContainerConfig: req.ContainerConfig,
+	}
+
+	if err := api.db.Create(project).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "project": project})
+}
+
+// ListProjects 列出项目
+func (api *ReleaseAPI) ListProjects(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	var projects []models.Project
+	if err := api.db.Find(&projects).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 构建包含版本数量的响应
+	type ProjectWithCount struct {
+		models.Project
+		VersionCount int64 `json:"version_count"`
+	}
+
+	var result []ProjectWithCount
+	for _, p := range projects {
+		var count int64
+		api.db.Model(&models.Version{}).Where("project_id = ?", p.ID).Count(&count)
+		result = append(result, ProjectWithCount{
+			Project:      p,
+			VersionCount: count,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "projects": result})
+}
+
+// GetProject 获取项目详情
+func (api *ReleaseAPI) GetProject(c *gin.Context) {
+	id := c.Param("id")
+	var project models.Project
+	if err := api.db.Preload("Environments").Preload("Pipelines").First(&project, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "project not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "project": project})
+}
+
+// UpdateProject 更新项目
+func (api *ReleaseAPI) UpdateProject(c *gin.Context) {
+	id := c.Param("id")
+	var project models.Project
+	if err := api.db.First(&project, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "project not found"})
+		return
+	}
+
+	var req struct {
+		Name            string                        `json:"name"`
+		Description     string                        `json:"description"`
+		RepoURL         string                        `json:"repo_url"`
+		ScriptConfig    *models.ScriptDeployConfig    `json:"script_config"`
+		GitPullConfig   *models.GitPullDeployConfig   `json:"gitpull_config"`
+		ContainerConfig *models.ContainerDeployConfig `json:"container_config"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if req.Name != "" {
+		project.Name = req.Name
+	}
+	if req.Description != "" {
+		project.Description = req.Description
+	}
+	if req.RepoURL != "" {
+		project.RepoURL = req.RepoURL
+	}
+	if req.ScriptConfig != nil {
+		project.ScriptConfig = req.ScriptConfig
+	}
+	if req.GitPullConfig != nil {
+		project.GitPullConfig = req.GitPullConfig
+	}
+	if req.ContainerConfig != nil {
+		project.ContainerConfig = req.ContainerConfig
+	}
+
+	if err := api.db.Save(&project).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "project": project})
+}
+
+// DeleteProject 删除项目
+func (api *ReleaseAPI) DeleteProject(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Project{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 环境管理 ====================
+
+// CreateEnvironment 创建环境
+func (api *ReleaseAPI) CreateEnvironment(c *gin.Context) {
+	projectID := c.Param("id")
+
+	var req struct {
+		Name            string                 `json:"name" binding:"required"`
+		Description     string                 `json:"description"`
+		ReleaseWindow   *models.ReleaseWindow  `json:"release_window"`
+		RequireApproval bool                   `json:"require_approval"`
+		Approvers       []string               `json:"approvers"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	env := &models.Environment{
+		ProjectID:       projectID,
+		Name:            req.Name,
+		Description:     req.Description,
+		ReleaseWindow:   req.ReleaseWindow,
+		RequireApproval: req.RequireApproval,
+		Approvers:       req.Approvers,
+	}
+
+	if err := api.db.Create(env).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "environment": env})
+}
+
+// ListEnvironments 列出环境
+func (api *ReleaseAPI) ListEnvironments(c *gin.Context) {
+	projectID := c.Param("id")
+	var envs []models.Environment
+	if err := api.db.Where("project_id = ?", projectID).Find(&envs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "environments": envs})
+}
+
+// GetEnvironment 获取环境详情
+func (api *ReleaseAPI) GetEnvironment(c *gin.Context) {
+	id := c.Param("id")
+	var env models.Environment
+	if err := api.db.Preload("Targets").First(&env, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "environment not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "environment": env})
+}
+
+// UpdateEnvironment 更新环境
+func (api *ReleaseAPI) UpdateEnvironment(c *gin.Context) {
+	id := c.Param("id")
+	var env models.Environment
+	if err := api.db.First(&env, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "environment not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(&env); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.db.Save(&env).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "environment": env})
+}
+
+// DeleteEnvironment 删除环境
+func (api *ReleaseAPI) DeleteEnvironment(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Environment{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 目标管理 ====================
+
+// CreateTarget 创建目标
+func (api *ReleaseAPI) CreateTarget(c *gin.Context) {
+	envID := c.Param("id")
+
+	var req struct {
+		ClientID string               `json:"client_id" binding:"required"`
+		Name     string               `json:"name" binding:"required"`
+		Type     models.TargetType    `json:"type" binding:"required"`
+		Labels   map[string]string    `json:"labels"`
+		Config   models.TargetConfig  `json:"config"`
+		Priority int                  `json:"priority"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	target := &models.Target{
+		EnvironmentID: envID,
+		ClientID:      req.ClientID,
+		Name:          req.Name,
+		Type:          req.Type,
+		Labels:        req.Labels,
+		Config:        req.Config,
+		Priority:      req.Priority,
+		Status:        models.TargetStatusUnknown,
+	}
+
+	if err := api.db.Create(target).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "target": target})
+}
+
+// ListTargets 列出目标
+func (api *ReleaseAPI) ListTargets(c *gin.Context) {
+	envID := c.Param("id")
+	var targets []models.Target
+	if err := api.db.Where("environment_id = ?", envID).Find(&targets).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "targets": targets})
+}
+
+// GetTarget 获取目标详情
+func (api *ReleaseAPI) GetTarget(c *gin.Context) {
+	id := c.Param("id")
+	var target models.Target
+	if err := api.db.First(&target, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "target not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "target": target})
+}
+
+// UpdateTarget 更新目标
+func (api *ReleaseAPI) UpdateTarget(c *gin.Context) {
+	id := c.Param("id")
+	var target models.Target
+	if err := api.db.First(&target, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "target not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(&target); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.db.Save(&target).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "target": target})
+}
+
+// DeleteTarget 删除目标
+func (api *ReleaseAPI) DeleteTarget(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Target{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 流水线管理 ====================
+
+// CreatePipeline 创建流水线
+func (api *ReleaseAPI) CreatePipeline(c *gin.Context) {
+	projectID := c.Param("id")
+
+	var req struct {
+		Name        string         `json:"name" binding:"required"`
+		Description string         `json:"description"`
+		IsDefault   bool           `json:"is_default"`
+		Stages      []models.Stage `json:"stages"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	pipeline := &models.Pipeline{
+		ProjectID:   projectID,
+		Name:        req.Name,
+		Description: req.Description,
+		IsDefault:   req.IsDefault,
+		Stages:      req.Stages,
+	}
+
+	if err := api.db.Create(pipeline).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "pipeline": pipeline})
+}
+
+// ListPipelines 列出流水线
+func (api *ReleaseAPI) ListPipelines(c *gin.Context) {
+	projectID := c.Param("id")
+	var pipelines []models.Pipeline
+	if err := api.db.Where("project_id = ?", projectID).Find(&pipelines).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "pipelines": pipelines})
+}
+
+// GetPipeline 获取流水线详情
+func (api *ReleaseAPI) GetPipeline(c *gin.Context) {
+	id := c.Param("id")
+	var pipeline models.Pipeline
+	if err := api.db.First(&pipeline, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "pipeline not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "pipeline": pipeline})
+}
+
+// UpdatePipeline 更新流水线
+func (api *ReleaseAPI) UpdatePipeline(c *gin.Context) {
+	id := c.Param("id")
+	var pipeline models.Pipeline
+	if err := api.db.First(&pipeline, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "pipeline not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(&pipeline); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.db.Save(&pipeline).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "pipeline": pipeline})
+}
+
+// DeletePipeline 删除流水线
+func (api *ReleaseAPI) DeletePipeline(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Pipeline{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 变量管理 ====================
+
+// CreateVariable 创建变量
+func (api *ReleaseAPI) CreateVariable(c *gin.Context) {
+	var req models.Variable
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.db.Create(&req).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "variable": req})
+}
+
+// ListProjectVariables 列出项目变量
+func (api *ReleaseAPI) ListProjectVariables(c *gin.Context) {
+	projectID := c.Param("id")
+	var vars []models.Variable
+	if err := api.db.Where("project_id = ?", projectID).Find(&vars).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "variables": vars})
+}
+
+// ListEnvVariables 列出环境变量
+func (api *ReleaseAPI) ListEnvVariables(c *gin.Context) {
+	envID := c.Param("id")
+	var vars []models.Variable
+	if err := api.db.Where("environment_id = ?", envID).Find(&vars).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "variables": vars})
+}
+
+// UpdateVariable 更新变量
+func (api *ReleaseAPI) UpdateVariable(c *gin.Context) {
+	id := c.Param("id")
+	var variable models.Variable
+	if err := api.db.First(&variable, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "variable not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(&variable); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.db.Save(&variable).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "variable": variable})
+}
+
+// DeleteVariable 删除变量
+func (api *ReleaseAPI) DeleteVariable(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Variable{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 发布管理 ====================
+
+// CreateRelease 创建发布
+func (api *ReleaseAPI) CreateRelease(c *gin.Context) {
+	var req engine.CreateReleaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// TODO: 从认证信息获取用户
+	req.CreatedBy = "admin"
+
+	release, err := api.engine.CreateRelease(c.Request.Context(), &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": release})
+}
+
+// ListReleases 列出发布
+func (api *ReleaseAPI) ListReleases(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Query("project_id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	releases, total, err := api.engine.ListReleases(c.Request.Context(), projectID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "releases": releases, "total": total})
+}
+
+// GetRelease 获取发布详情
+func (api *ReleaseAPI) GetRelease(c *gin.Context) {
+	id := c.Param("id")
+	release, err := api.engine.GetRelease(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "release not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": release})
+}
+
+// StartRelease 开始发布
+func (api *ReleaseAPI) StartRelease(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.engine.StartRelease(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// CancelRelease 取消发布
+func (api *ReleaseAPI) CancelRelease(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.engine.CancelRelease(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// RollbackRelease 回滚发布
+func (api *ReleaseAPI) RollbackRelease(c *gin.Context) {
+	id := c.Param("id")
+
+	var req struct {
+		TargetVersion string `json:"target_version"`
+	}
+	c.ShouldBindJSON(&req)
+
+	// 获取原发布信息
+	var release models.Release
+	if err := api.db.First(&release, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "release not found"})
+		return
+	}
+
+	// 创建回滚发布
+	rollbackReq := &engine.CreateReleaseRequest{
+		ProjectID:     release.ProjectID,
+		EnvironmentID: release.EnvironmentID,
+		PipelineID:    release.PipelineID,
+		Version:       req.TargetVersion,
+		Operation:     models.OperationTypeRollback,
+		TargetIDs:     release.TargetIDs,
+		CreatedBy:     "admin", // TODO: 从认证获取
+	}
+
+	rollback, err := api.engine.CreateRelease(c.Request.Context(), rollbackReq)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 自动开始回滚
+	if err := api.engine.StartRelease(c.Request.Context(), rollback.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": rollback})
+}
+
+// PromoteRelease 金丝雀全量发布
+func (api *ReleaseAPI) PromoteRelease(c *gin.Context) {
+	id := c.Param("id")
+	if err := api.engine.PromoteCanary(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// InstallService 安装服务
+func (api *ReleaseAPI) InstallService(c *gin.Context) {
+	var req engine.CreateReleaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	req.Operation = models.OperationTypeInstall
+	req.CreatedBy = "admin"
+
+	release, err := api.engine.CreateRelease(c.Request.Context(), &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 自动开始
+	if err := api.engine.StartRelease(c.Request.Context(), release.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": release})
+}
+
+// UpdateService 更新服务
+func (api *ReleaseAPI) UpdateService(c *gin.Context) {
+	var req engine.CreateReleaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	req.Operation = models.OperationTypeUpdate
+	req.CreatedBy = "admin"
+
+	release, err := api.engine.CreateRelease(c.Request.Context(), &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.engine.StartRelease(c.Request.Context(), release.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": release})
+}
+
+// UninstallService 卸载服务
+func (api *ReleaseAPI) UninstallService(c *gin.Context) {
+	var req engine.CreateReleaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	req.Operation = models.OperationTypeUninstall
+	req.CreatedBy = "admin"
+
+	release, err := api.engine.CreateRelease(c.Request.Context(), &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if err := api.engine.StartRelease(c.Request.Context(), release.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "release": release})
+}
+
+// ==================== 审批管理 ====================
+
+// ListApprovals 列出待审批
+func (api *ReleaseAPI) ListApprovals(c *gin.Context) {
+	var approvals []models.Approval
+	if err := api.db.Where("status = ?", models.ApprovalStatusPending).Find(&approvals).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "approvals": approvals})
+}
+
+// ApproveRelease 同意发布
+func (api *ReleaseAPI) ApproveRelease(c *gin.Context) {
+	id := c.Param("id")
+	var approval models.Approval
+	if err := api.db.First(&approval, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "approval not found"})
+		return
+	}
+
+	approver := "admin" // TODO: 从认证获取
+	approval.Status = models.ApprovalStatusApproved
+	approval.ApprovedBy = &approver
+
+	if err := api.db.Save(&approval).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 自动开始发布
+	if err := api.engine.StartRelease(c.Request.Context(), approval.ReleaseID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// RejectRelease 拒绝发布
+func (api *ReleaseAPI) RejectRelease(c *gin.Context) {
+	id := c.Param("id")
+	var approval models.Approval
+	if err := api.db.First(&approval, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "approval not found"})
+		return
+	}
+
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	c.ShouldBindJSON(&req)
+
+	approver := "admin"
+	approval.Status = models.ApprovalStatusRejected
+	approval.ApprovedBy = &approver
+	approval.Comment = req.Comment
+
+	if err := api.db.Save(&approval).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 更新发布状态为取消
+	api.db.Model(&models.Release{}).Where("id = ?", approval.ReleaseID).Updates(map[string]interface{}{
+		"status":      models.ReleaseStatusCancelled,
+		"finished_at": time.Now(),
+	})
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 版本管理 ====================
+
+// CreateVersion 创建版本
+func (api *ReleaseAPI) CreateVersion(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Param("id")
+
+	var req struct {
+		Version         string `json:"version" binding:"required"`
+		Description     string `json:"description"`
+		WorkDir         string `json:"work_dir"`
+		InstallScript   string `json:"install_script"`
+		UpdateScript    string `json:"update_script"`
+		RollbackScript  string `json:"rollback_script"`
+		UninstallScript string `json:"uninstall_script"`
+		SkipValidation  bool   `json:"skip_validation"` // 跳过验证
+		// Git 相关
+		GitRef     string `json:"git_ref"`
+		GitRefType string `json:"git_ref_type"`
+		// 容器/K8s 相关
+		ContainerImage string `json:"container_image"`
+		ContainerEnv   string `json:"container_env"`
+		Replicas       int    `json:"replicas"`
+		K8sYAML        string `json:"k8s_yaml"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 检查项目是否存在
+	var project models.Project
+	if err := api.db.First(&project, "id = ?", projectID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "project not found"})
+		return
+	}
+
+	// 如果是脚本部署类型，验证脚本语法
+	if project.Type == models.DeployTypeScript && !req.SkipValidation {
+		// 安装脚本必须有
+		if strings.TrimSpace(req.InstallScript) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "安装脚本不能为空"})
+			return
+		}
+
+		valid, errors := validateAllScripts(req.InstallScript, req.UpdateScript, req.RollbackScript, req.UninstallScript)
+		if !valid {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success":          false,
+				"error":            "脚本语法验证失败",
+				"validation_errors": errors,
+			})
+			return
+		}
+	}
+
+	workDir := req.WorkDir
+	if workDir == "" {
+		workDir = "/opt/app"
+	}
+
+	replicas := req.Replicas
+	if replicas <= 0 {
+		replicas = 1
+	}
+
+	version := &models.Version{
+		ProjectID:       projectID,
+		Version:         req.Version,
+		Description:     req.Description,
+		WorkDir:         workDir,
+		InstallScript:   req.InstallScript,
+		UpdateScript:    req.UpdateScript,
+		RollbackScript:  req.RollbackScript,
+		UninstallScript: req.UninstallScript,
+		GitRef:          req.GitRef,
+		GitRefType:      req.GitRefType,
+		ContainerImage:  req.ContainerImage,
+		ContainerEnv:    req.ContainerEnv,
+		Replicas:        replicas,
+		K8sYAML:         req.K8sYAML,
+		Status:          "draft",
+	}
+
+	if err := api.db.Create(version).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "version": version})
+}
+
+// ListVersions 列出版本
+func (api *ReleaseAPI) ListVersions(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Param("id")
+	var versions []models.Version
+	if err := api.db.Where("project_id = ?", projectID).Order("created_at DESC").Find(&versions).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "versions": versions})
+}
+
+// GetVersion 获取版本详情
+func (api *ReleaseAPI) GetVersion(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+	var version models.Version
+	if err := api.db.First(&version, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "version": version})
+}
+
+// UpdateVersion 更新版本
+func (api *ReleaseAPI) UpdateVersion(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+	var version models.Version
+	if err := api.db.First(&version, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+		return
+	}
+
+	var req struct {
+		Description     string `json:"description"`
+		WorkDir         string `json:"work_dir"`
+		InstallScript   string `json:"install_script"`
+		UpdateScript    string `json:"update_script"`
+		RollbackScript  string `json:"rollback_script"`
+		UninstallScript string `json:"uninstall_script"`
+		Status          string `json:"status"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if req.Description != "" {
+		version.Description = req.Description
+	}
+	if req.WorkDir != "" {
+		version.WorkDir = req.WorkDir
+	}
+	if req.InstallScript != "" {
+		version.InstallScript = req.InstallScript
+	}
+	if req.UpdateScript != "" {
+		version.UpdateScript = req.UpdateScript
+	}
+	if req.RollbackScript != "" {
+		version.RollbackScript = req.RollbackScript
+	}
+	if req.UninstallScript != "" {
+		version.UninstallScript = req.UninstallScript
+	}
+	if req.Status != "" {
+		version.Status = req.Status
+	}
+
+	if err := api.db.Save(&version).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "version": version})
+}
+
+// DeleteVersion 删除版本
+func (api *ReleaseAPI) DeleteVersion(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+	if err := api.db.Delete(&models.Version{}, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ==================== 部署任务管理 ====================
+
+// CreateDeployTask 创建部署任务
+func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	var req struct {
+		ProjectID         string     `json:"project_id" binding:"required"`
+		VersionID         string     `json:"version_id" binding:"required"`
+		Operation         string     `json:"operation" binding:"required"`
+		ClientIDs         []string   `json:"client_ids" binding:"required"`
+		ScheduleType      string     `json:"schedule_type"`
+		ScheduleFrom      *time.Time `json:"schedule_from"`
+		ScheduleTo        *time.Time `json:"schedule_to"`
+		CanaryEnabled     bool       `json:"canary_enabled"`
+		CanaryPercent     int        `json:"canary_percent"`
+		CanaryDuration    int        `json:"canary_duration"`
+		CanaryAutoPromote bool       `json:"canary_auto_promote"`
+		FailureStrategy   string     `json:"failure_strategy"`
+		AutoRollback      bool       `json:"auto_rollback"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 获取版本信息
+	var version models.Version
+	if err := api.db.First(&version, "id = ?", req.VersionID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+		return
+	}
+
+	scheduleType := req.ScheduleType
+	if scheduleType == "" {
+		scheduleType = "immediate"
+	}
+
+	failureStrategy := req.FailureStrategy
+	if failureStrategy == "" {
+		failureStrategy = "continue"
+	}
+
+	canaryPercent := req.CanaryPercent
+	if canaryPercent == 0 {
+		canaryPercent = 10
+	}
+
+	canaryDuration := req.CanaryDuration
+	if canaryDuration == 0 {
+		canaryDuration = 30
+	}
+
+	task := &models.DeployTask{
+		ProjectID:         req.ProjectID,
+		VersionID:         req.VersionID,
+		Version:           version.Version,
+		Operation:         models.OperationType(req.Operation),
+		ClientIDs:         req.ClientIDs,
+		ScheduleType:      scheduleType,
+		ScheduleFrom:      req.ScheduleFrom,
+		ScheduleTo:        req.ScheduleTo,
+		CanaryEnabled:     req.CanaryEnabled,
+		CanaryPercent:     canaryPercent,
+		CanaryDuration:    canaryDuration,
+		CanaryAutoPromote: req.CanaryAutoPromote,
+		FailureStrategy:   failureStrategy,
+		AutoRollback:      req.AutoRollback,
+		Status:            "pending",
+		TotalCount:        len(req.ClientIDs),
+		PendingCount:      len(req.ClientIDs),
+		CreatedBy:         "admin", // TODO: 从认证获取
+	}
+
+	// 初始化结果
+	results := make(models.DeployTaskResults, len(req.ClientIDs))
+	for i, clientID := range req.ClientIDs {
+		results[i] = models.DeployTaskResult{
+			ClientID: clientID,
+			Status:   "pending",
+		}
+	}
+	task.Results = results
+
+	// 如果是定时任务，设置状态
+	if scheduleType == "scheduled" && req.ScheduleFrom != nil {
+		task.Status = "scheduled"
+	}
+
+	if err := api.db.Create(task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "task": task})
+}
+
+// ListDeployTasks 列出部署任务
+func (api *ReleaseAPI) ListDeployTasks(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Param("id")
+	status := c.Query("status")
+
+	query := api.db.Where("project_id = ?", projectID)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	var tasks []models.DeployTask
+	if err := query.Order("created_at DESC").Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "tasks": tasks})
+}
+
+// GetDeployTask 获取部署任务详情
+func (api *ReleaseAPI) GetDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "task": task})
+}
+
+// StartDeployTask 开始部署任务
+func (api *ReleaseAPI) StartDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	if task.Status != "pending" && task.Status != "scheduled" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "task cannot be started"})
+		return
+	}
+
+	now := time.Now()
+	task.Status = "running"
+	task.StartedAt = &now
+
+	// 如果启用金丝雀，先设置为金丝雀状态
+	if task.CanaryEnabled {
+		task.Status = "canary"
+	}
+
+	if err := api.db.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 触发实际的部署执行
+	go api.executeDeployTask(&task)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "task": task})
+}
+
+// CancelDeployTask 取消部署任务
+func (api *ReleaseAPI) CancelDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	if task.Status == "completed" || task.Status == "cancelled" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "task cannot be cancelled"})
+		return
+	}
+
+	now := time.Now()
+	task.Status = "cancelled"
+	task.FinishedAt = &now
+
+	if err := api.db.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// PauseDeployTask 暂停部署任务
+func (api *ReleaseAPI) PauseDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	if task.Status != "running" && task.Status != "canary" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "task cannot be paused"})
+		return
+	}
+
+	task.Status = "paused"
+
+	if err := api.db.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// PromoteDeployTask 金丝雀全量发布
+func (api *ReleaseAPI) PromoteDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	if task.Status != "canary" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "task is not in canary status"})
+		return
+	}
+
+	task.Status = "running"
+
+	if err := api.db.Save(&task).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 触发剩余节点的部署
+	go api.promoteDeployTask(&task)
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// RollbackDeployTask 回滚部署任务
+func (api *ReleaseAPI) RollbackDeployTask(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	if task.Status != "canary" && task.Status != "running" && task.Status != "failed" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "task cannot be rolled back"})
+		return
+	}
+
+	// 获取版本的回滚脚本
+	var version models.Version
+	if err := api.db.First(&version, "id = ?", task.VersionID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+		return
+	}
+
+	// 触发回滚执行
+	go api.rollbackDeployTask(&task, &version)
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// executeDeployTask 执行部署任务（内部方法）
+func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
+	// 获取版本信息
+	var version models.Version
+	if err := api.db.First(&version, "id = ?", task.VersionID).Error; err != nil {
+		return
+	}
+
+	// 根据操作类型选择脚本
+	var script string
+	switch task.Operation {
+	case models.OperationTypeInstall:
+		script = version.InstallScript
+	case models.OperationTypeUpdate:
+		script = version.UpdateScript
+	case models.OperationTypeRollback:
+		script = version.RollbackScript
+	case models.OperationTypeUninstall:
+		script = version.UninstallScript
+	}
+
+	// 确定要执行的客户端
+	var clientsToExecute []string
+	if task.CanaryEnabled && task.Status == "canary" {
+		// 金丝雀阶段：只执行部分客户端
+		canaryCount := len(task.ClientIDs) * task.CanaryPercent / 100
+		if canaryCount < 1 {
+			canaryCount = 1
+		}
+		clientsToExecute = task.ClientIDs[:canaryCount]
+
+		// 标记金丝雀节点
+		for i := range task.Results {
+			for _, canaryClient := range clientsToExecute {
+				if task.Results[i].ClientID == canaryClient {
+					task.Results[i].IsCanary = true
+				}
+			}
+		}
+	} else {
+		clientsToExecute = task.ClientIDs
+	}
+
+	// 使用远程执行器执行命令
+	if api.engine != nil {
+		for _, clientID := range clientsToExecute {
+			// 查找是否为金丝雀节点
+			var isCanary bool
+			for _, r := range task.Results {
+				if r.ClientID == clientID {
+					isCanary = r.IsCanary
+					break
+				}
+			}
+
+			// 更新结果状态为运行中
+			startTime := time.Now()
+			for i := range task.Results {
+				if task.Results[i].ClientID == clientID {
+					task.Results[i].Status = "running"
+					task.Results[i].StartedAt = &startTime
+				}
+			}
+			api.db.Save(task)
+
+			// 执行远程命令
+			result, err := api.engine.ExecuteRemote(clientID, script, version.WorkDir)
+			finishTime := time.Now()
+
+			// 更新结果
+			var status string
+			var errMsg string
+			for i := range task.Results {
+				if task.Results[i].ClientID == clientID {
+					task.Results[i].FinishedAt = &finishTime
+					task.Results[i].Duration = int(finishTime.Sub(startTime).Seconds())
+
+					if err != nil {
+						status = "failed"
+						errMsg = err.Error()
+						task.Results[i].Status = status
+						task.Results[i].Error = errMsg
+						task.FailedCount++
+
+						// 如果是升级操作且启用了自动回滚
+						if task.Operation == models.OperationTypeUpdate && task.AutoRollback {
+							go api.autoRollbackClient(task, &version, clientID)
+						}
+					} else {
+						status = "success"
+						task.Results[i].Status = status
+						task.Results[i].Output = result
+						task.SuccessCount++
+					}
+					task.PendingCount--
+				}
+			}
+			api.db.Save(task)
+
+			// 记录部署日志
+			api.recordDeployLog(task, &version, clientID, status, 0, result, errMsg, startTime, finishTime, isCanary)
+
+			// 检查失败策略
+			if err != nil {
+				switch task.FailureStrategy {
+				case "abort":
+					now := time.Now()
+					task.Status = "failed"
+					task.FinishedAt = &now
+					api.db.Save(task)
+					return
+				case "pause":
+					task.Status = "paused"
+					api.db.Save(task)
+					return
+				}
+			}
+		}
+	}
+
+	// 更新任务状态
+	if task.Status != "canary" {
+		now := time.Now()
+		if task.FailedCount > 0 {
+			task.Status = "failed"
+		} else {
+			task.Status = "completed"
+		}
+		task.FinishedAt = &now
+
+		// 部署成功后更新版本状态和部署计数
+		if task.Status == "completed" && task.SuccessCount > 0 {
+			// 更新版本状态为 active，并增加部署计数
+			api.db.Model(&models.Version{}).
+				Where("id = ?", task.VersionID).
+				Updates(map[string]interface{}{
+					"status":       "active",
+					"deploy_count": gorm.Expr("deploy_count + ?", task.SuccessCount),
+				})
+		}
+	}
+	api.db.Save(task)
+}
+
+// promoteDeployTask 金丝雀全量发布
+func (api *ReleaseAPI) promoteDeployTask(task *models.DeployTask) {
+	// 继续执行剩余的非金丝雀节点
+	task.Status = "running"
+	api.db.Save(task)
+	api.executeDeployTask(task)
+}
+
+// rollbackDeployTask 回滚部署任务
+func (api *ReleaseAPI) rollbackDeployTask(task *models.DeployTask, version *models.Version) {
+	script := version.RollbackScript
+	if script == "" {
+		return
+	}
+
+	// 只回滚已成功或失败的节点
+	for i := range task.Results {
+		if task.Results[i].Status == "success" || task.Results[i].Status == "failed" {
+			clientID := task.Results[i].ClientID
+			if api.engine != nil {
+				_, err := api.engine.ExecuteRemote(clientID, script, version.WorkDir)
+				if err != nil {
+					task.Results[i].Error = "rollback failed: " + err.Error()
+				} else {
+					task.Results[i].Status = "rollback"
+				}
+			}
+		}
+	}
+
+	task.Status = "cancelled"
+	now := time.Now()
+	task.FinishedAt = &now
+	api.db.Save(task)
+}
+
+// autoRollbackClient 自动回滚单个客户端
+func (api *ReleaseAPI) autoRollbackClient(task *models.DeployTask, version *models.Version, clientID string) {
+	script := version.RollbackScript
+	if script == "" {
+		return
+	}
+
+	if api.engine != nil {
+		api.engine.ExecuteRemote(clientID, script, version.WorkDir)
+	}
+}
+
+// ==================== 部署日志管理 ====================
+
+// DeployLogWithProject 带项目名的部署日志
+type DeployLogWithProject struct {
+	models.DeployLog
+	ProjectName string `json:"project_name"`
+}
+
+// ListDeployLogs 列出部署日志
+func (api *ReleaseAPI) ListDeployLogs(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	status := c.Query("status")
+	clientID := c.Query("client_id")
+
+	// 构建查询条件
+	query := api.db.Table("deploy_logs").
+		Select("deploy_logs.*, projects.name as project_name").
+		Joins("LEFT JOIN projects ON deploy_logs.project_id = projects.id")
+
+	if status != "" {
+		query = query.Where("deploy_logs.status = ?", status)
+	}
+	if clientID != "" {
+		query = query.Where("deploy_logs.client_id = ?", clientID)
+	}
+
+	var total int64
+	api.db.Model(&models.DeployLog{}).Count(&total)
+
+	var logs []DeployLogWithProject
+	if err := query.Order("deploy_logs.created_at DESC").
+		Limit(limit).Offset(offset).
+		Scan(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "logs": logs, "total": total})
+}
+
+// GetDeployLog 获取部署日志详情
+func (api *ReleaseAPI) GetDeployLog(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	id := c.Param("id")
+	var log models.DeployLog
+	if err := api.db.First(&log, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "log not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "log": log})
+}
+
+// ListProjectDeployLogs 列出项目的部署日志
+func (api *ReleaseAPI) ListProjectDeployLogs(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Param("id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	status := c.Query("status")
+
+	query := api.db.Model(&models.DeployLog{}).Where("project_id = ?", projectID)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var logs []models.DeployLog
+	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "logs": logs, "total": total})
+}
+
+// GetProjectDeployStats 获取项目的部署统计
+func (api *ReleaseAPI) GetProjectDeployStats(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	projectID := c.Param("id")
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+
+	since := time.Now().AddDate(0, 0, -days)
+
+	var stats models.DeployStats
+	api.db.Model(&models.DeployLog{}).
+		Where("project_id = ? AND created_at >= ?", projectID, since).
+		Count(&stats.TotalCount)
+
+	api.db.Model(&models.DeployLog{}).
+		Where("project_id = ? AND created_at >= ? AND status = ?", projectID, since, "success").
+		Count(&stats.SuccessCount)
+
+	api.db.Model(&models.DeployLog{}).
+		Where("project_id = ? AND created_at >= ? AND status = ?", projectID, since, "failed").
+		Count(&stats.FailedCount)
+
+	if stats.TotalCount > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalCount) * 100
+	}
+
+	// 获取每日统计
+	type DailyStat struct {
+		Date         string `json:"date"`
+		TotalCount   int64  `json:"total_count"`
+		SuccessCount int64  `json:"success_count"`
+		FailedCount  int64  `json:"failed_count"`
+	}
+
+	var dailyStats []DailyStat
+	api.db.Model(&models.DeployLog{}).
+		Select("DATE(created_at) as date, COUNT(*) as total_count, SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count").
+		Where("project_id = ? AND created_at >= ?", projectID, since).
+		Group("DATE(created_at)").
+		Order("date DESC").
+		Scan(&dailyStats)
+
+	// 获取客户端统计
+	type ClientStat struct {
+		ClientID     string  `json:"client_id"`
+		TotalCount   int64   `json:"total_count"`
+		SuccessCount int64   `json:"success_count"`
+		FailedCount  int64   `json:"failed_count"`
+		SuccessRate  float64 `json:"success_rate"`
+	}
+
+	var clientStats []ClientStat
+	api.db.Model(&models.DeployLog{}).
+		Select("client_id, COUNT(*) as total_count, SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count").
+		Where("project_id = ? AND created_at >= ?", projectID, since).
+		Group("client_id").
+		Order("total_count DESC").
+		Scan(&clientStats)
+
+	for i := range clientStats {
+		if clientStats[i].TotalCount > 0 {
+			clientStats[i].SuccessRate = float64(clientStats[i].SuccessCount) / float64(clientStats[i].TotalCount) * 100
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":       true,
+		"stats":         stats,
+		"daily_stats":   dailyStats,
+		"client_stats":  clientStats,
+	})
+}
+
+// GetDeployStats 获取整体部署统计
+func (api *ReleaseAPI) GetDeployStats(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+
+	since := time.Now().AddDate(0, 0, -days)
+
+	var stats models.DeployStats
+	api.db.Model(&models.DeployLog{}).
+		Where("created_at >= ?", since).
+		Count(&stats.TotalCount)
+
+	api.db.Model(&models.DeployLog{}).
+		Where("created_at >= ? AND status = ?", since, "success").
+		Count(&stats.SuccessCount)
+
+	api.db.Model(&models.DeployLog{}).
+		Where("created_at >= ? AND status = ?", since, "failed").
+		Count(&stats.FailedCount)
+
+	if stats.TotalCount > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalCount) * 100
+	}
+
+	// 获取执行中的任务数量
+	var runningCount int64
+	api.db.Model(&models.DeployTask{}).
+		Where("status IN ?", []string{"running", "canary"}).
+		Count(&runningCount)
+
+	// 获取项目统计
+	type ProjectStat struct {
+		ProjectID    string  `json:"project_id"`
+		ProjectName  string  `json:"project_name"`
+		TotalCount   int64   `json:"total_count"`
+		SuccessCount int64   `json:"success_count"`
+		FailedCount  int64   `json:"failed_count"`
+		SuccessRate  float64 `json:"success_rate"`
+	}
+
+	var projectStats []ProjectStat
+	api.db.Model(&models.DeployLog{}).
+		Select("deploy_logs.project_id, projects.name as project_name, COUNT(*) as total_count, SUM(CASE WHEN deploy_logs.status = 'success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN deploy_logs.status = 'failed' THEN 1 ELSE 0 END) as failed_count").
+		Joins("LEFT JOIN projects ON deploy_logs.project_id = projects.id").
+		Where("deploy_logs.created_at >= ?", since).
+		Group("deploy_logs.project_id, projects.name").
+		Order("total_count DESC").
+		Scan(&projectStats)
+
+	for i := range projectStats {
+		if projectStats[i].TotalCount > 0 {
+			projectStats[i].SuccessRate = float64(projectStats[i].SuccessCount) / float64(projectStats[i].TotalCount) * 100
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"stats":          stats,
+		"running_count":  runningCount,
+		"project_stats":  projectStats,
+	})
+}
+
+// recordDeployLog 记录部署日志
+func (api *ReleaseAPI) recordDeployLog(task *models.DeployTask, version *models.Version, clientID string, status string, exitCode int, output, errMsg string, startedAt, finishedAt time.Time, isCanary bool) {
+	log := &models.DeployLog{
+		TaskID:     task.ID,
+		ProjectID:  task.ProjectID,
+		VersionID:  task.VersionID,
+		Version:    task.Version,
+		ClientID:   clientID,
+		Operation:  task.Operation,
+		IsCanary:   isCanary,
+		Status:     status,
+		ExitCode:   exitCode,
+		Output:     output,
+		Error:      errMsg,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		Duration:   int(finishedAt.Sub(startedAt).Seconds()),
+		CreatedBy:  task.CreatedBy,
+	}
+
+	api.db.Create(log)
+}
+
+// ==================== 脚本验证 ====================
+
+// ScriptValidationResult 脚本验证结果
+type ScriptValidationResult struct {
+	Valid   bool     `json:"valid"`
+	Errors  []string `json:"errors,omitempty"`
+	Warning string   `json:"warning,omitempty"`
+}
+
+// ValidateScript 验证 shell 脚本语法
+func (api *ReleaseAPI) ValidateScript(c *gin.Context) {
+	var req struct {
+		Script string `json:"script" binding:"required"`
+		Name   string `json:"name"` // 脚本名称，用于错误提示
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	result := validateShellScript(req.Script, req.Name)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// validateShellScript 验证 shell 脚本
+func validateShellScript(script, name string) *ScriptValidationResult {
+	result := &ScriptValidationResult{Valid: true}
+
+	if strings.TrimSpace(script) == "" {
+		result.Valid = false
+		result.Errors = append(result.Errors, "脚本内容不能为空")
+		return result
+	}
+
+	// 检查是否有 shebang
+	lines := strings.Split(script, "\n")
+	hasShebang := false
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "#!") {
+		hasShebang = true
+	}
+
+	if !hasShebang {
+		result.Warning = "建议在脚本开头添加 shebang (如 #!/bin/bash)"
+	}
+
+	// 使用 bash -n 检查语法
+	cmd := exec.Command("bash", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		result.Valid = false
+		// 解析错误信息
+		errorOutput := strings.TrimSpace(string(output))
+		if errorOutput != "" {
+			// 格式化错误信息
+			errorLines := strings.Split(errorOutput, "\n")
+			for _, line := range errorLines {
+				if strings.TrimSpace(line) != "" {
+					// 移除 "bash: line X:" 前缀，保留有意义的错误信息
+					if idx := strings.Index(line, ":"); idx != -1 {
+						line = strings.TrimSpace(line[idx+1:])
+						if idx2 := strings.Index(line, ":"); idx2 != -1 {
+							line = strings.TrimSpace(line[idx2+1:])
+						}
+					}
+					if name != "" {
+						result.Errors = append(result.Errors, name+": "+line)
+					} else {
+						result.Errors = append(result.Errors, line)
+					}
+				}
+			}
+		}
+		if len(result.Errors) == 0 {
+			result.Errors = append(result.Errors, "脚本语法错误")
+		}
+	}
+
+	return result
+}
+
+// validateAllScripts 验证所有脚本
+func validateAllScripts(installScript, updateScript, rollbackScript, uninstallScript string) (bool, []string) {
+	var allErrors []string
+
+	// 安装脚本必须有
+	if strings.TrimSpace(installScript) == "" {
+		allErrors = append(allErrors, "安装脚本不能为空")
+	} else {
+		result := validateShellScript(installScript, "安装脚本")
+		if !result.Valid {
+			allErrors = append(allErrors, result.Errors...)
+		}
+	}
+
+	// 其他脚本可选，但如果有内容则验证
+	if strings.TrimSpace(updateScript) != "" {
+		result := validateShellScript(updateScript, "升级脚本")
+		if !result.Valid {
+			allErrors = append(allErrors, result.Errors...)
+		}
+	}
+
+	if strings.TrimSpace(rollbackScript) != "" {
+		result := validateShellScript(rollbackScript, "回滚脚本")
+		if !result.Valid {
+			allErrors = append(allErrors, result.Errors...)
+		}
+	}
+
+	if strings.TrimSpace(uninstallScript) != "" {
+		result := validateShellScript(uninstallScript, "卸载脚本")
+		if !result.Valid {
+			allErrors = append(allErrors, result.Errors...)
+		}
+	}
+
+	return len(allErrors) == 0, allErrors
+}
+
+// GetGitVersions 获取 Git 仓库版本信息
+func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
+	var req struct {
+		ClientID   string `json:"client_id" binding:"required"`
+		ProjectID  string `json:"project_id"`
+		RepoURL    string `json:"repo_url"`
+		WorkDir    string `json:"work_dir"`
+		AuthType   string `json:"auth_type"`
+		SSHKey     string `json:"ssh_key"`
+		Token      string `json:"token"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		MaxTags    int    `json:"max_tags"`
+		MaxCommits int    `json:"max_commits"`
+		IncludeBranches bool `json:"include_branches"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// 构建配置
+	var config *models.GitPullDeployConfig
+
+	// 如果提供了 project_id，从项目获取配置
+	if req.ProjectID != "" && api.db != nil {
+		var project models.Project
+		if err := api.db.First(&project, "id = ?", req.ProjectID).Error; err == nil {
+			config = project.GitPullConfig
+		}
+	}
+
+	// 如果没有从项目获取到配置，使用请求参数构建
+	if config == nil {
+		config = &models.GitPullDeployConfig{
+			RepoURL:  req.RepoURL,
+			WorkDir:  req.WorkDir,
+			AuthType: req.AuthType,
+			SSHKey:   req.SSHKey,
+			Token:    req.Token,
+			Username: req.Username,
+			Password: req.Password,
+		}
+	}
+
+	// 验证必须有仓库地址
+	if config.RepoURL == "" && req.RepoURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "repo_url is required",
+		})
+		return
+	}
+
+	// 如果请求中有仓库地址，优先使用
+	if req.RepoURL != "" {
+		config.RepoURL = req.RepoURL
+	}
+
+	// 设置默认值
+	maxTags := req.MaxTags
+	if maxTags <= 0 {
+		maxTags = 20
+	}
+	maxCommits := req.MaxCommits
+	if maxCommits <= 0 {
+		maxCommits = 10
+	}
+
+	// 调用引擎获取版本信息
+	result, err := api.engine.FetchGitVersions(
+		c.Request.Context(),
+		req.ClientID,
+		config,
+		maxTags,
+		maxCommits,
+		req.IncludeBranches,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        result.Success,
+		"repo_url":       result.RepoURL,
+		"default_branch": result.DefaultBranch,
+		"tags":           result.Tags,
+		"branches":       result.Branches,
+		"recent_commits": result.RecentCommits,
+		"current_commit": result.CurrentCommit,
+		"current_branch": result.CurrentBranch,
+		"error":          result.Error,
+	})
+}

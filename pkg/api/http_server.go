@@ -118,6 +118,11 @@ func (h *HTTPServer) Stop(ctx context.Context) error {
 	return h.server.Shutdown(ctx)
 }
 
+// GetAPIGroup 返回 API 路由组，用于外部注册路由
+func (h *HTTPServer) GetAPIGroup() *gin.RouterGroup {
+	return h.router.Group("/api")
+}
+
 // ClientDetail 客户端详情
 type ClientDetail struct {
 	ClientID    string `json:"client_id"`
@@ -617,7 +622,26 @@ func (h *HTTPServer) AddRecordingRoutes(recordingAPI *RecordingAPI) {
 	h.logger.Info("Recording API routes added")
 }
 
+// ReleaseAPIRegistrar 发布API注册接口
+type ReleaseAPIRegistrar interface {
+	RegisterRoutes(r *gin.RouterGroup)
+}
+
+// AddReleaseRoutes adds release API routes
+func (h *HTTPServer) AddReleaseRoutes(releaseAPI ReleaseAPIRegistrar) {
+	api := h.router.Group("/api")
+	releaseAPI.RegisterRoutes(api)
+	h.logger.Info("Release API routes added")
+}
+
 // GetRouter 返回 gin.Engine 路由器（用于外部注册更多路由）
 func (h *HTTPServer) GetRouter() *gin.Engine {
 	return h.router
+}
+
+// AddSetupRoutes 添加数据库初始化引导路由
+func (h *HTTPServer) AddSetupRoutes(setupAPI *SetupAPI) {
+	api := h.router.Group("/api")
+	setupAPI.RegisterRoutes(api)
+	h.logger.Info("Setup API routes added")
 }

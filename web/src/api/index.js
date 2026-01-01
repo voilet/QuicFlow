@@ -206,6 +206,253 @@ export const api = {
   // 清理旧录像
   cleanupRecordings(days = 30) {
     return request.delete('/recordings/cleanup', { params: { days } })
+  },
+
+  // ===== 发布系统 API =====
+
+  // 项目管理
+  getProjects() {
+    return request.get('/release/projects')
+  },
+
+  getProject(id) {
+    return request.get(`/release/projects/${id}`)
+  },
+
+  createProject(data) {
+    return request.post('/release/projects', data)
+  },
+
+  updateProject(id, data) {
+    return request.put(`/release/projects/${id}`, data)
+  },
+
+  deleteProject(id) {
+    return request.delete(`/release/projects/${id}`)
+  },
+
+  // 环境管理
+  getEnvironments(projectId) {
+    return request.get(`/release/projects/${projectId}/environments`)
+  },
+
+  getEnvironment(id) {
+    return request.get(`/release/environments/${id}`)
+  },
+
+  createEnvironment(projectId, data) {
+    return request.post(`/release/projects/${projectId}/environments`, data)
+  },
+
+  updateEnvironment(id, data) {
+    return request.put(`/release/environments/${id}`, data)
+  },
+
+  deleteEnvironment(id) {
+    return request.delete(`/release/environments/${id}`)
+  },
+
+  // 目标管理
+  getTargets(envId) {
+    return request.get(`/release/environments/${envId}/targets`)
+  },
+
+  getTarget(id) {
+    return request.get(`/release/targets/${id}`)
+  },
+
+  createTarget(envId, data) {
+    return request.post(`/release/environments/${envId}/targets`, data)
+  },
+
+  updateTarget(id, data) {
+    return request.put(`/release/targets/${id}`, data)
+  },
+
+  deleteTarget(id) {
+    return request.delete(`/release/targets/${id}`)
+  },
+
+  // 流水线管理
+  getPipelines(projectId) {
+    return request.get(`/release/projects/${projectId}/pipelines`)
+  },
+
+  getPipeline(id) {
+    return request.get(`/release/pipelines/${id}`)
+  },
+
+  createPipeline(projectId, data) {
+    return request.post(`/release/projects/${projectId}/pipelines`, data)
+  },
+
+  updatePipeline(id, data) {
+    return request.put(`/release/pipelines/${id}`, data)
+  },
+
+  deletePipeline(id) {
+    return request.delete(`/release/pipelines/${id}`)
+  },
+
+  // 发布管理
+  getReleases(params = {}) {
+    return request.get('/release/deploys', { params })
+  },
+
+  getRelease(id) {
+    return request.get(`/release/deploys/${id}`)
+  },
+
+  createRelease(data) {
+    return request.post('/release/deploys', data)
+  },
+
+  startRelease(id) {
+    return request.post(`/release/deploys/${id}/start`)
+  },
+
+  cancelRelease(id) {
+    return request.post(`/release/deploys/${id}/cancel`)
+  },
+
+  rollbackRelease(id, data = {}) {
+    return request.post(`/release/deploys/${id}/rollback`, data)
+  },
+
+  promoteRelease(id) {
+    return request.post(`/release/deploys/${id}/promote`)
+  },
+
+  // 快捷操作
+  installService(data) {
+    return request.post('/release/install', data)
+  },
+
+  updateService(data) {
+    return request.post('/release/update', data)
+  },
+
+  uninstallService(data) {
+    return request.post('/release/uninstall', data)
+  },
+
+  // 审批管理
+  getApprovals() {
+    return request.get('/release/approvals')
+  },
+
+  approveRelease(id) {
+    return request.post(`/release/approvals/${id}/approve`)
+  },
+
+  rejectRelease(id, data = {}) {
+    return request.post(`/release/approvals/${id}/reject`, data)
+  },
+
+  // ===== 版本管理 =====
+
+  // 获取项目版本列表
+  getVersions(projectId) {
+    return request.get(`/release/projects/${projectId}/versions`)
+  },
+
+  // 获取版本详情
+  getVersion(id) {
+    return request.get(`/release/versions/${id}`)
+  },
+
+  // 创建版本
+  createVersion(projectId, data) {
+    return request.post(`/release/projects/${projectId}/versions`, data)
+  },
+
+  // 更新版本
+  updateVersion(id, data) {
+    return request.put(`/release/versions/${id}`, data)
+  },
+
+  // 删除版本
+  deleteVersion(id) {
+    return request.delete(`/release/versions/${id}`)
+  },
+
+  // ===== 部署任务管理 =====
+
+  // 获取项目部署任务列表
+  getDeployTasks(projectId, params = {}) {
+    return request.get(`/release/projects/${projectId}/tasks`, { params })
+  },
+
+  // 获取部署任务详情
+  getDeployTask(id) {
+    return request.get(`/release/tasks/${id}`)
+  },
+
+  // 创建部署任务
+  createDeployTask(data) {
+    return request.post('/release/tasks', data)
+  },
+
+  // 开始部署任务
+  startDeployTask(id) {
+    return request.post(`/release/tasks/${id}/start`)
+  },
+
+  // 取消部署任务
+  cancelDeployTask(id) {
+    return request.post(`/release/tasks/${id}/cancel`)
+  },
+
+  // 暂停部署任务
+  pauseDeployTask(id) {
+    return request.post(`/release/tasks/${id}/pause`)
+  },
+
+  // 金丝雀全量发布
+  promoteDeployTask(id) {
+    return request.post(`/release/tasks/${id}/promote`)
+  },
+
+  // 回滚部署任务
+  rollbackDeployTask(id) {
+    return request.post(`/release/tasks/${id}/rollback`)
+  },
+
+  // ===== 部署日志 =====
+
+  // 获取部署日志列表
+  getDeployLogs(params = {}) {
+    return request.get('/release/logs', { params })
+  },
+
+  // 获取部署日志详情
+  getDeployLog(id) {
+    return request.get(`/release/logs/${id}`)
+  },
+
+  // 获取项目的部署日志
+  getProjectDeployLogs(projectId, params = {}) {
+    return request.get(`/release/projects/${projectId}/logs`, { params })
+  },
+
+  // 获取项目的部署统计
+  getProjectDeployStats(projectId, params = {}) {
+    return request.get(`/release/projects/${projectId}/stats`, { params })
+  },
+
+  // 获取整体部署统计
+  getDeployStats(params = {}) {
+    return request.get('/release/stats', { params })
+  },
+
+  // 验证脚本语法
+  validateScript(data) {
+    return request.post('/release/validate-script', data)
+  },
+
+  // 获取 Git 仓库版本信息（tags、branches、commits）
+  getGitVersions(data) {
+    return request.post('/release/git-versions', data)
   }
 }
 

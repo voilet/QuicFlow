@@ -19,9 +19,13 @@ import (
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/recording"
+	releaseapi "github.com/voilet/quic-flow/pkg/release/api"
+	releasemodels "github.com/voilet/quic-flow/pkg/release/models"
 	"github.com/voilet/quic-flow/pkg/router"
 	"github.com/voilet/quic-flow/pkg/transport/server"
 	"github.com/voilet/quic-flow/pkg/version"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -117,6 +121,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	if configFile != "" {
 		logger.Info("Config file loaded", "path", configFile)
 	}
+
+	// 初始化数据库（如果启用）
+	var releaseDB *gorm.DB
+	if cfg.Database.Enabled {
+		releaseDB, err = initDatabase(cfg, logger)
+		if err != nil {
+			logger.Error("Failed to initialize database", "error", err)
+			logger.Warn("Release system will run without database")
+		}
+	} else {
+		logger.Info("Database disabled, release system will be limited")
+	}
+
 	logger.Info("Starting server",
 		"addr", cfg.Server.Addr,
 		"high_perf", cfg.Server.HighPerf,
@@ -183,6 +200,21 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 启动 HTTP API 服务器
 	httpServer := api.NewHTTPServer(cfg.Server.APIAddr, srv, commandManager, logger)
 
+	// 添加数据库初始化引导 API
+	setupAPI := api.NewSetupAPI(configFile, logger)
+	httpServer.AddSetupRoutes(setupAPI)
+
+	// 尝试自动连接数据库（如果配置了）
+	if cfg.Database.Enabled {
+		if err := setupAPI.TryAutoConnect(cfg); err != nil {
+			logger.Warn("Auto-connect to database failed", "error", err)
+			logger.Info("Visit /setup to configure database")
+		} else {
+			logger.Info("Database auto-connected successfully")
+			releaseDB = setupAPI.GetDB()
+		}
+	}
+
 	// 添加批量执行 API
 	if batchExecutor != nil {
 		httpServer.AddBatchRoutes(batchExecutor)
@@ -233,6 +265,23 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 添加录像 API 路由
 	recordingAPI := api.NewRecordingAPI(recordingStore, logger)
 	httpServer.AddRecordingRoutes(recordingAPI)
+
+	// 添加发布系统 API 路由
+	releaseAPI := releaseapi.NewReleaseAPIWithRemote(releaseDB, commandManager)
+	httpServer.AddReleaseRoutes(releaseAPI)
+
+	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API
+	setupAPI.SetOnDBReady(func(db *gorm.DB) {
+		releaseAPI.SetDB(db)
+		releaseAPI.SetRemoteExecutor(commandManager)
+		logger.Info("Release API database updated via setup")
+	})
+
+	if releaseDB != nil {
+		logger.Info("Release API routes added with database")
+	} else {
+		logger.Info("Release API routes added (database not configured, visit /setup)")
+	}
 
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
@@ -417,4 +466,39 @@ func shutdownServer(logger *monitoring.Logger, disp *dispatcher.Dispatcher, http
 	}
 
 	logger.Info("Server stopped gracefully")
+}
+
+// initDatabase 初始化数据库连接
+func initDatabase(cfg *config.ServerConfig, logger *monitoring.Logger) (*gorm.DB, error) {
+	dbConfig := &releasemodels.DatabaseConfig{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		DBName:   cfg.Database.DBName,
+		SSLMode:  cfg.Database.SSLMode,
+	}
+
+	logger.Info("Connecting to database",
+		"host", dbConfig.Host,
+		"port", dbConfig.Port,
+		"dbname", dbConfig.DBName)
+
+	db, err := releasemodels.InitDB(dbConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("Database connected successfully")
+
+	// 自动迁移表结构
+	if cfg.Database.AutoMigrate {
+		logger.Info("Running database migrations...")
+		if err := releasemodels.Migrate(db); err != nil {
+			return nil, fmt.Errorf("database migration failed: %w", err)
+		}
+		logger.Info("Database migrations completed")
+	}
+
+	return db, nil
 }

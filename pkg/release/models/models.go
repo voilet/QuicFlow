@@ -1,0 +1,1011 @@
+package models
+
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// ==================== 枚举类型 ====================
+
+// DeployType 部署类型
+type DeployType string
+
+const (
+	DeployTypeContainer  DeployType = "container"
+	DeployTypeKubernetes DeployType = "kubernetes"
+	DeployTypeScript     DeployType = "script"
+	DeployTypeGitPull    DeployType = "gitpull"
+)
+
+// OperationType 操作类型
+type OperationType string
+
+const (
+	OperationTypeDeploy    OperationType = "deploy"    // 部署 (自动判断 install/update)
+	OperationTypeInstall   OperationType = "install"   // 强制安装
+	OperationTypeUpdate    OperationType = "update"    // 强制更新
+	OperationTypeRollback  OperationType = "rollback"  // 回滚
+	OperationTypeUninstall OperationType = "uninstall" // 卸载
+)
+
+// ReleaseStatus 发布状态
+type ReleaseStatus string
+
+const (
+	ReleaseStatusPending    ReleaseStatus = "pending"
+	ReleaseStatusScheduled  ReleaseStatus = "scheduled"
+	ReleaseStatusApproving  ReleaseStatus = "approving"
+	ReleaseStatusRunning    ReleaseStatus = "running"
+	ReleaseStatusPaused     ReleaseStatus = "paused"
+	ReleaseStatusSuccess    ReleaseStatus = "success"
+	ReleaseStatusFailed     ReleaseStatus = "failed"
+	ReleaseStatusCancelled  ReleaseStatus = "cancelled"
+	ReleaseStatusRollback   ReleaseStatus = "rollback"
+)
+
+// TargetType 目标类型
+type TargetType string
+
+const (
+	TargetTypeHost       TargetType = "host"
+	TargetTypeK8sCluster TargetType = "k8s-cluster"
+)
+
+// TargetStatus 目标状态
+type TargetStatus string
+
+const (
+	TargetStatusOnline  TargetStatus = "online"
+	TargetStatusOffline TargetStatus = "offline"
+	TargetStatusUnknown TargetStatus = "unknown"
+)
+
+// VariableType 变量类型
+type VariableType string
+
+const (
+	VariableTypePlain       VariableType = "plain"
+	VariableTypeSecret      VariableType = "secret"
+	VariableTypeEnvSpecific VariableType = "env_specific"
+	VariableTypeTemplate    VariableType = "template"
+)
+
+// StagePhase 阶段类型
+type StagePhase string
+
+const (
+	StagePhasePreRelease  StagePhase = "pre_release"
+	StagePhaseRelease     StagePhase = "release"
+	StagePhasePostRelease StagePhase = "post_release"
+)
+
+// ErrorAction 错误处理动作
+type ErrorAction string
+
+const (
+	ErrorActionContinue ErrorAction = "continue"
+	ErrorActionStop     ErrorAction = "stop"
+	ErrorActionRollback ErrorAction = "rollback"
+)
+
+// TaskType 任务类型
+type TaskType string
+
+const (
+	TaskTypeHealthCheck  TaskType = "health_check"
+	TaskTypeBackup       TaskType = "backup"
+	TaskTypeScript       TaskType = "script"
+	TaskTypeStopService  TaskType = "stop_service"
+	TaskTypeStartService TaskType = "start_service"
+	TaskTypeDeploy       TaskType = "deploy"
+	TaskTypeRollback     TaskType = "rollback"
+	TaskTypeCleanup      TaskType = "cleanup"
+	TaskTypeNotify       TaskType = "notify"
+	TaskTypeWait         TaskType = "wait"
+	TaskTypeApproval     TaskType = "approval"
+	TaskTypeCondition    TaskType = "condition"
+	TaskTypeDBMigrate    TaskType = "db_migrate"
+)
+
+// StrategyType 发布策略类型
+type StrategyType string
+
+const (
+	StrategyTypeRolling   StrategyType = "rolling"
+	StrategyTypeBlueGreen StrategyType = "blue_green"
+	StrategyTypeCanary    StrategyType = "canary"
+)
+
+// RollbackGranularity 回滚粒度
+type RollbackGranularity string
+
+const (
+	RollbackGranularityAll    RollbackGranularity = "all"
+	RollbackGranularitySingle RollbackGranularity = "single"
+)
+
+// ApprovalStatus 审批状态
+type ApprovalStatus string
+
+const (
+	ApprovalStatusPending  ApprovalStatus = "pending"
+	ApprovalStatusApproved ApprovalStatus = "approved"
+	ApprovalStatusRejected ApprovalStatus = "rejected"
+	ApprovalStatusExpired  ApprovalStatus = "expired"
+)
+
+// TargetReleaseStatus 目标发布状态
+type TargetReleaseStatus string
+
+const (
+	TargetReleaseStatusPending  TargetReleaseStatus = "pending"
+	TargetReleaseStatusRunning  TargetReleaseStatus = "running"
+	TargetReleaseStatusSuccess  TargetReleaseStatus = "success"
+	TargetReleaseStatusFailed   TargetReleaseStatus = "failed"
+	TargetReleaseStatusSkipped  TargetReleaseStatus = "skipped"
+	TargetReleaseStatusRollback TargetReleaseStatus = "rollback"
+)
+
+// InstallStatus 安装状态
+type InstallStatus string
+
+const (
+	InstallStatusInstalled   InstallStatus = "installed"
+	InstallStatusUninstalled InstallStatus = "uninstalled"
+	InstallStatusFailed      InstallStatus = "failed"
+	InstallStatusUnknown     InstallStatus = "unknown"
+)
+
+// ==================== JSON 类型 ====================
+
+// StringMap 字符串映射
+type StringMap map[string]string
+
+func (m StringMap) Value() (driver.Value, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return json.Marshal(m)
+}
+
+func (m *StringMap) Scan(value interface{}) error {
+	if value == nil {
+		*m = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, m)
+}
+
+// StringSlice 字符串切片
+type StringSlice []string
+
+func (s StringSlice) Value() (driver.Value, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return json.Marshal(s)
+}
+
+func (s *StringSlice) Scan(value interface{}) error {
+	if value == nil {
+		*s = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, s)
+}
+
+// ==================== 核心模型 ====================
+
+// Project 项目
+type Project struct {
+	ID          string     `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name        string     `gorm:"uniqueIndex;size:100;not null" json:"name"`
+	Description string     `gorm:"size:500" json:"description"`
+	Type        DeployType `gorm:"size:20;not null" json:"type"`
+	RepoURL     string     `gorm:"size:500" json:"repo_url"`
+	RepoType    string     `gorm:"size:20" json:"repo_type"` // git/svn
+
+	// 脚本部署配置
+	ScriptConfig *ScriptDeployConfig `gorm:"type:jsonb" json:"script_config,omitempty"`
+
+	// 容器部署配置
+	ContainerConfig *ContainerDeployConfig `gorm:"type:jsonb" json:"container_config,omitempty"`
+
+	// Git 拉取部署配置
+	GitPullConfig *GitPullDeployConfig `gorm:"type:jsonb" json:"gitpull_config,omitempty"`
+
+	// 关联
+	Environments []Environment `gorm:"foreignKey:ProjectID" json:"environments,omitempty"`
+	Variables    []Variable    `gorm:"foreignKey:ProjectID" json:"variables,omitempty"`
+	Pipelines    []Pipeline    `gorm:"foreignKey:ProjectID" json:"pipelines,omitempty"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// Environment 环境
+type Environment struct {
+	ID          string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID   string `gorm:"type:uuid;index;not null" json:"project_id"`
+	Name        string `gorm:"size:50;not null" json:"name"` // dev/test/staging/prod
+	Description string `gorm:"size:200" json:"description"`
+
+	// 发布窗口
+	ReleaseWindow *ReleaseWindow `gorm:"type:jsonb" json:"release_window,omitempty"`
+
+	// 审批配置
+	RequireApproval bool        `gorm:"default:false" json:"require_approval"`
+	Approvers       StringSlice `gorm:"type:jsonb" json:"approvers,omitempty"`
+
+	// 关联
+	Project   Project    `gorm:"foreignKey:ProjectID" json:"-"`
+	Targets   []Target   `gorm:"foreignKey:EnvironmentID" json:"targets,omitempty"`
+	Variables []Variable `gorm:"foreignKey:EnvironmentID" json:"variables,omitempty"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ReleaseWindow 发布窗口配置
+type ReleaseWindow struct {
+	Enabled     bool   `json:"enabled"`
+	Timezone    string `json:"timezone"`      // Asia/Shanghai
+	AllowedDays []int  `json:"allowed_days"`  // 1-7 (Monday-Sunday)
+	StartTime   string `json:"start_time"`    // HH:MM
+	EndTime     string `json:"end_time"`      // HH:MM
+}
+
+func (r ReleaseWindow) Value() (driver.Value, error) {
+	return json.Marshal(r)
+}
+
+func (r *ReleaseWindow) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, r)
+}
+
+// Target 部署目标
+type Target struct {
+	ID            string       `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	EnvironmentID string       `gorm:"type:uuid;index;not null" json:"environment_id"`
+	ClientID      string       `gorm:"size:100;index;not null" json:"client_id"` // QUIC客户端ID
+	Name          string       `gorm:"size:100;not null" json:"name"`
+	Type          TargetType   `gorm:"size:20;not null" json:"type"`
+	Status        TargetStatus `gorm:"size:20;default:'unknown'" json:"status"`
+	Labels        StringMap    `gorm:"type:jsonb" json:"labels,omitempty"`
+	Config        TargetConfig `gorm:"type:jsonb" json:"config"`
+	Priority      int          `gorm:"default:0" json:"priority"` // 部署优先级，用于金丝雀
+
+	// 关联
+	Environment Environment `gorm:"foreignKey:EnvironmentID" json:"-"`
+
+	LastSeenAt *time.Time     `json:"last_seen_at,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TargetConfig 目标配置
+type TargetConfig struct {
+	// Docker配置
+	DockerHost    string `json:"docker_host,omitempty"`
+	DockerTLSPath string `json:"docker_tls_path,omitempty"`
+
+	// K8s配置
+	KubeConfig  string `json:"kubeconfig,omitempty"`
+	KubeContext string `json:"kube_context,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+
+	// 通用配置
+	WorkDir string `json:"work_dir,omitempty"`
+	User    string `json:"user,omitempty"`
+	SSHKey  string `json:"ssh_key,omitempty"`
+}
+
+func (t TargetConfig) Value() (driver.Value, error) {
+	return json.Marshal(t)
+}
+
+func (t *TargetConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, t)
+}
+
+// Variable 变量
+type Variable struct {
+	ID            string       `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID     *string      `gorm:"type:uuid;index" json:"project_id,omitempty"`
+	EnvironmentID *string      `gorm:"type:uuid;index" json:"environment_id,omitempty"`
+	Name          string       `gorm:"size:100;not null" json:"name"`
+	Value         string       `gorm:"type:text" json:"value"`
+	Type          VariableType `gorm:"size:20;default:'plain'" json:"type"`
+	Description   string       `gorm:"size:200" json:"description"`
+
+	// 环境差异化值
+	EnvValues StringMap `gorm:"type:jsonb" json:"env_values,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Pipeline 流水线
+type Pipeline struct {
+	ID          string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID   string `gorm:"type:uuid;index;not null" json:"project_id"`
+	Name        string `gorm:"size:100;not null" json:"name"`
+	Description string `gorm:"size:500" json:"description"`
+	IsDefault   bool   `gorm:"default:false" json:"is_default"`
+
+	// 阶段配置
+	Stages Stages `gorm:"type:jsonb" json:"stages"`
+
+	// 关联
+	Project Project `gorm:"foreignKey:ProjectID" json:"-"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// Stages 阶段列表
+type Stages []Stage
+
+func (s Stages) Value() (driver.Value, error) {
+	return json.Marshal(s)
+}
+
+func (s *Stages) Scan(value interface{}) error {
+	if value == nil {
+		*s = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, s)
+}
+
+// Stage 阶段
+type Stage struct {
+	Name     string      `json:"name"`
+	Phase    StagePhase  `json:"phase"`
+	Tasks    []Task      `json:"tasks"`
+	OnError  ErrorAction `json:"on_error"`
+	Parallel bool        `json:"parallel"`
+}
+
+// Task 任务
+type Task struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Type       TaskType       `json:"type"`
+	Config     map[string]any `json:"config"`
+	Timeout    int            `json:"timeout"`
+	Retry      int            `json:"retry"`
+	RetryDelay int            `json:"retry_delay"`
+	Condition  string         `json:"condition"`
+	DependsOn  []string       `json:"depends_on"`
+}
+
+// Release 发布记录
+type Release struct {
+	ID            string        `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID     string        `gorm:"type:uuid;index;not null" json:"project_id"`
+	EnvironmentID string        `gorm:"type:uuid;index;not null" json:"environment_id"`
+	PipelineID    string        `gorm:"type:uuid;index;not null" json:"pipeline_id"`
+	Version       string        `gorm:"size:50;not null" json:"version"`
+	Operation     OperationType `gorm:"size:20;not null;default:'deploy'" json:"operation"`
+	Status        ReleaseStatus `gorm:"size:20;not null;index" json:"status"`
+
+	// 发布配置
+	Strategy       ReleaseStrategy `gorm:"type:jsonb" json:"strategy"`
+	Variables      StringMap       `gorm:"type:jsonb" json:"variables,omitempty"`
+	TargetIDs      StringSlice     `gorm:"type:jsonb" json:"target_ids,omitempty"`
+	RollbackConfig *RollbackConfig `gorm:"type:jsonb" json:"rollback_config,omitempty"`
+
+	// 定时发布
+	ScheduledAt *time.Time `gorm:"index" json:"scheduled_at,omitempty"`
+
+	// 执行结果
+	Results TargetResults `gorm:"type:jsonb" json:"results,omitempty"`
+
+	// 元信息
+	CreatedBy  string  `gorm:"size:100;not null" json:"created_by"`
+	ApprovedBy *string `gorm:"size:100" json:"approved_by,omitempty"`
+
+	CreatedAt  time.Time  `json:"created_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// ReleaseStrategy 发布策略
+type ReleaseStrategy struct {
+	Type StrategyType `json:"type"`
+
+	// 滚动更新配置
+	BatchSize     int `json:"batch_size"`
+	BatchInterval int `json:"batch_interval"`
+
+	// 金丝雀配置
+	CanaryPercent  int         `json:"canary_percent"`
+	CanaryTargets  StringSlice `json:"canary_targets,omitempty"`
+	VerifyDuration int         `json:"verify_duration"`
+	AutoPromote    bool        `json:"auto_promote"`
+
+	// 蓝绿配置
+	SwitchTimeout  int  `json:"switch_timeout"`
+	KeepOldVersion bool `json:"keep_old_version"`
+}
+
+func (r ReleaseStrategy) Value() (driver.Value, error) {
+	return json.Marshal(r)
+}
+
+func (r *ReleaseStrategy) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, r)
+}
+
+// RollbackConfig 回滚配置
+type RollbackConfig struct {
+	Granularity   RollbackGranularity `json:"granularity"`
+	AutoRollback  bool                `json:"auto_rollback"`
+	Conditions    []RollbackCondition `json:"conditions,omitempty"`
+	TargetVersion string              `json:"target_version,omitempty"`
+}
+
+func (r RollbackConfig) Value() (driver.Value, error) {
+	return json.Marshal(r)
+}
+
+func (r *RollbackConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, r)
+}
+
+// RollbackCondition 回滚条件
+type RollbackCondition struct {
+	Type      string `json:"type"`
+	Threshold any    `json:"threshold"`
+}
+
+// TargetResults 目标结果列表
+type TargetResults []TargetResult
+
+func (t TargetResults) Value() (driver.Value, error) {
+	return json.Marshal(t)
+}
+
+func (t *TargetResults) Scan(value interface{}) error {
+	if value == nil {
+		*t = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, t)
+}
+
+// TargetResult 目标执行结果
+type TargetResult struct {
+	TargetID   string              `json:"target_id"`
+	TargetName string              `json:"target_name"`
+	Status     TargetReleaseStatus `json:"status"`
+	StartedAt  *time.Time          `json:"started_at,omitempty"`
+	FinishedAt *time.Time          `json:"finished_at,omitempty"`
+	Stages     []StageResult       `json:"stages,omitempty"`
+	Error      string              `json:"error,omitempty"`
+}
+
+// StageResult 阶段执行结果
+type StageResult struct {
+	Name       string       `json:"name"`
+	Phase      StagePhase   `json:"phase"`
+	Status     string       `json:"status"`
+	Tasks      []TaskResult `json:"tasks,omitempty"`
+	StartedAt  *time.Time   `json:"started_at,omitempty"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
+}
+
+// TaskResult 任务执行结果
+type TaskResult struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Type       TaskType   `json:"type"`
+	Status     string     `json:"status"`
+	Output     string     `json:"output,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	RetryCount int        `json:"retry_count"`
+}
+
+// ScriptDeployConfig 脚本部署配置
+type ScriptDeployConfig struct {
+	WorkDir     string    `json:"work_dir"`
+	Interpreter string    `json:"interpreter"`
+	Environment StringMap `json:"environment,omitempty"`
+
+	// 四种操作脚本
+	InstallScript   string `json:"install_script"`
+	UpdateScript    string `json:"update_script"`
+	RollbackScript  string `json:"rollback_script"`
+	UninstallScript string `json:"uninstall_script"`
+
+	// 超时配置
+	Timeouts ScriptTimeouts `json:"timeouts"`
+}
+
+func (s ScriptDeployConfig) Value() (driver.Value, error) {
+	return json.Marshal(s)
+}
+
+func (s *ScriptDeployConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, s)
+}
+
+// ScriptTimeouts 脚本超时配置
+type ScriptTimeouts struct {
+	Install   int `json:"install"`
+	Update    int `json:"update"`
+	Rollback  int `json:"rollback"`
+	Uninstall int `json:"uninstall"`
+}
+
+// ContainerDeployConfig 容器部署配置
+type ContainerDeployConfig struct {
+	// 镜像配置
+	Image         string `json:"image"`                    // 镜像地址 (registry/image:tag)
+	Registry      string `json:"registry,omitempty"`       // 镜像仓库地址
+	RegistryUser  string `json:"registry_user,omitempty"`  // 仓库用户名
+	RegistryPass  string `json:"registry_pass,omitempty"`  // 仓库密码 (加密存储)
+	ImagePullPolicy string `json:"image_pull_policy,omitempty"` // always, ifnotpresent, never
+
+	// 容器配置
+	ContainerName string            `json:"container_name"`           // 容器名称
+	Ports         []PortMapping     `json:"ports,omitempty"`          // 端口映射
+	Volumes       []VolumeMount     `json:"volumes,omitempty"`        // 卷挂载
+	Environment   map[string]string `json:"environment,omitempty"`    // 环境变量
+	Networks      []string          `json:"networks,omitempty"`       // 网络
+	RestartPolicy string            `json:"restart_policy,omitempty"` // no, always, on-failure, unless-stopped
+	Command       []string          `json:"command,omitempty"`        // 启动命令
+	Entrypoint    []string          `json:"entrypoint,omitempty"`     // 入口点
+
+	// 资源限制
+	MemoryLimit   string `json:"memory_limit,omitempty"`   // 如 512m, 1g
+	CPULimit      string `json:"cpu_limit,omitempty"`      // 如 0.5, 1
+	MemoryReserve string `json:"memory_reserve,omitempty"` // 内存预留
+
+	// 健康检查
+	HealthCheck *ContainerHealthCheck `json:"health_check,omitempty"`
+
+	// 部署策略
+	StopTimeout    int  `json:"stop_timeout"`     // 停止超时（秒）
+	RemoveOld      bool `json:"remove_old"`       // 移除旧容器
+	KeepOldCount   int  `json:"keep_old_count"`   // 保留旧容器数量
+	PullBeforeStop bool `json:"pull_before_stop"` // 先拉取镜像再停止
+}
+
+// PortMapping 端口映射
+type PortMapping struct {
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol,omitempty"` // tcp, udp
+	HostIP        string `json:"host_ip,omitempty"`  // 绑定的主机IP
+}
+
+// VolumeMount 卷挂载
+type VolumeMount struct {
+	HostPath      string `json:"host_path"`
+	ContainerPath string `json:"container_path"`
+	ReadOnly      bool   `json:"read_only,omitempty"`
+	Type          string `json:"type,omitempty"` // bind, volume, tmpfs
+}
+
+// ContainerHealthCheck 容器健康检查
+type ContainerHealthCheck struct {
+	Command     []string `json:"command"`               // 检查命令
+	Interval    int      `json:"interval,omitempty"`    // 检查间隔（秒）
+	Timeout     int      `json:"timeout,omitempty"`     // 超时时间（秒）
+	Retries     int      `json:"retries,omitempty"`     // 重试次数
+	StartPeriod int      `json:"start_period,omitempty"` // 启动等待期（秒）
+}
+
+func (c ContainerDeployConfig) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+func (c *ContainerDeployConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, c)
+}
+
+// GitPullDeployConfig Git 拉取部署配置
+type GitPullDeployConfig struct {
+	// Git 仓库配置
+	RepoURL    string `json:"repo_url"`              // 仓库地址
+	Branch     string `json:"branch,omitempty"`      // 分支，默认 main
+	Tag        string `json:"tag,omitempty"`         // 标签（优先于分支）
+	Commit     string `json:"commit,omitempty"`      // 指定 commit
+	Depth      int    `json:"depth,omitempty"`       // 克隆深度，0 表示完整克隆
+	Submodules bool   `json:"submodules,omitempty"`  // 初始化子模块
+
+	// 认证配置
+	AuthType   string `json:"auth_type,omitempty"`   // none, ssh, token, basic
+	SSHKey     string `json:"ssh_key,omitempty"`     // SSH 私钥
+	Token      string `json:"token,omitempty"`       // Access Token
+	Username   string `json:"username,omitempty"`    // 用户名
+	Password   string `json:"password,omitempty"`    // 密码
+
+	// 部署配置
+	WorkDir       string `json:"work_dir"`                 // 工作目录
+	CleanBefore   bool   `json:"clean_before,omitempty"`   // 部署前清理
+	BackupBefore  bool   `json:"backup_before,omitempty"`  // 部署前备份
+	BackupDir     string `json:"backup_dir,omitempty"`     // 备份目录
+	BackupKeep    int    `json:"backup_keep,omitempty"`    // 保留备份数量
+
+	// 部署脚本
+	PreScript     string            `json:"pre_script,omitempty"`     // 部署前执行的脚本
+	PostScript    string            `json:"post_script,omitempty"`    // 部署后执行的脚本
+	Environment   map[string]string `json:"environment,omitempty"`    // 环境变量
+	Interpreter   string            `json:"interpreter,omitempty"`    // 脚本解释器
+
+	// 超时配置
+	CloneTimeout  int `json:"clone_timeout,omitempty"`  // 克隆超时（秒）
+	ScriptTimeout int `json:"script_timeout,omitempty"` // 脚本执行超时（秒）
+}
+
+func (g GitPullDeployConfig) Value() (driver.Value, error) {
+	return json.Marshal(g)
+}
+
+func (g *GitPullDeployConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, g)
+}
+
+// Version 版本（每个项目可创建多个版本）
+type Version struct {
+	ID          string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID   string `gorm:"type:uuid;index;not null" json:"project_id"`
+	Version     string `gorm:"size:50;not null" json:"version"`
+	Description string `gorm:"size:500" json:"description"`
+	WorkDir     string `gorm:"size:500;default:'/opt/app'" json:"work_dir"`
+
+	// 四种操作脚本
+	InstallScript   string `gorm:"type:text" json:"install_script"`
+	UpdateScript    string `gorm:"type:text" json:"update_script"`
+	RollbackScript  string `gorm:"type:text" json:"rollback_script"`
+	UninstallScript string `gorm:"type:text" json:"uninstall_script"`
+
+	// Git 相关字段（用于 gitpull 类型项目）
+	GitRef     string `gorm:"size:200" json:"git_ref"`      // tag/branch/commit 值
+	GitRefType string `gorm:"size:20" json:"git_ref_type"`  // tag/branch/commit 类型
+
+	// 容器相关字段（用于 container/kubernetes 类型项目）
+	ContainerImage string `gorm:"size:500" json:"container_image"` // 镜像地址
+	ContainerEnv   string `gorm:"type:text" json:"container_env"`  // 环境变量（KEY=value 格式）
+	Replicas       int    `gorm:"default:1" json:"replicas"`       // K8s 副本数
+	K8sYAML        string `gorm:"type:text" json:"k8s_yaml"`       // K8s YAML 配置
+
+	// 状态
+	Status string `gorm:"size:20;default:'draft'" json:"status"` // draft, active, deprecated
+
+	// 统计
+	DeployCount int `gorm:"default:0" json:"deploy_count"`
+
+	// 关联
+	Project Project `gorm:"foreignKey:ProjectID" json:"-"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// VersionStatus 版本状态
+type VersionStatus string
+
+const (
+	VersionStatusDraft      VersionStatus = "draft"
+	VersionStatusActive     VersionStatus = "active"
+	VersionStatusDeprecated VersionStatus = "deprecated"
+)
+
+// DeployTask 部署任务
+type DeployTask struct {
+	ID        string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID string `gorm:"type:uuid;index;not null" json:"project_id"`
+	VersionID string `gorm:"type:uuid;index;not null" json:"version_id"`
+	Version   string `gorm:"size:50;not null" json:"version"` // 冗余存储版本号
+
+	// 操作类型
+	Operation OperationType `gorm:"size:20;not null" json:"operation"`
+
+	// 目标
+	ClientIDs StringSlice `gorm:"type:jsonb" json:"client_ids"`
+
+	// 执行计划
+	ScheduleType string     `gorm:"size:20;default:'immediate'" json:"schedule_type"` // immediate, scheduled
+	ScheduleFrom *time.Time `json:"schedule_from,omitempty"`
+	ScheduleTo   *time.Time `json:"schedule_to,omitempty"`
+
+	// 金丝雀配置
+	CanaryEnabled     bool `gorm:"default:false" json:"canary_enabled"`
+	CanaryPercent     int  `gorm:"default:10" json:"canary_percent"`
+	CanaryDuration    int  `gorm:"default:30" json:"canary_duration"` // 观察时间（分钟）
+	CanaryAutoPromote bool `gorm:"default:false" json:"canary_auto_promote"`
+
+	// 失败处理
+	FailureStrategy string `gorm:"size:20;default:'continue'" json:"failure_strategy"` // continue, pause, abort
+	AutoRollback    bool   `gorm:"default:true" json:"auto_rollback"`                  // 升级失败自动回滚
+
+	// 任务状态
+	Status       string `gorm:"size:20;default:'pending';index" json:"status"` // pending, scheduled, running, canary, paused, completed, failed, cancelled
+	TotalCount   int    `gorm:"default:0" json:"total_count"`
+	SuccessCount int    `gorm:"default:0" json:"success_count"`
+	FailedCount  int    `gorm:"default:0" json:"failed_count"`
+	PendingCount int    `gorm:"default:0" json:"pending_count"`
+
+	// 执行结果
+	Results DeployTaskResults `gorm:"type:jsonb" json:"results,omitempty"`
+
+	// 创建者
+	CreatedBy string `gorm:"size:100;not null" json:"created_by"`
+
+	CreatedAt  time.Time  `json:"created_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// DeployTaskStatus 部署任务状态
+type DeployTaskStatus string
+
+const (
+	DeployTaskStatusPending   DeployTaskStatus = "pending"
+	DeployTaskStatusScheduled DeployTaskStatus = "scheduled"
+	DeployTaskStatusRunning   DeployTaskStatus = "running"
+	DeployTaskStatusCanary    DeployTaskStatus = "canary"
+	DeployTaskStatusPaused    DeployTaskStatus = "paused"
+	DeployTaskStatusCompleted DeployTaskStatus = "completed"
+	DeployTaskStatusFailed    DeployTaskStatus = "failed"
+	DeployTaskStatusCancelled DeployTaskStatus = "cancelled"
+)
+
+// DeployTaskResults 部署任务结果列表
+type DeployTaskResults []DeployTaskResult
+
+func (t DeployTaskResults) Value() (driver.Value, error) {
+	return json.Marshal(t)
+}
+
+func (t *DeployTaskResults) Scan(value interface{}) error {
+	if value == nil {
+		*t = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, t)
+}
+
+// DeployTaskResult 单个目标的执行结果
+type DeployTaskResult struct {
+	ClientID   string     `json:"client_id"`
+	Status     string     `json:"status"` // pending, running, success, failed, skipped
+	IsCanary   bool       `json:"is_canary"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Duration   int        `json:"duration"` // 秒
+	Error      string     `json:"error,omitempty"`
+	Output     string     `json:"output,omitempty"`
+}
+
+// TargetInstallation 目标安装状态
+type TargetInstallation struct {
+	ID            string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	TargetID      string    `gorm:"type:uuid;index;not null" json:"target_id"`
+	ProjectID     string    `gorm:"type:uuid;index;not null" json:"project_id"`
+	Version       string    `gorm:"size:50;not null" json:"version"`
+	Status        string    `gorm:"size:20;not null" json:"status"`
+	InstalledAt   time.Time `gorm:"not null" json:"installed_at"`
+	LastUpdatedAt *time.Time `json:"last_updated_at,omitempty"`
+
+	// 备份信息
+	BackupPath  string `gorm:"size:500" json:"backup_path,omitempty"`
+	BackupCount int    `gorm:"default:0" json:"backup_count"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// StatusReport 状态上报记录
+type StatusReport struct {
+	ID        string     `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReleaseID string     `gorm:"type:uuid;index;not null" json:"release_id"`
+	TargetID  string     `gorm:"type:uuid;index;not null" json:"target_id"`
+	ClientID  string     `gorm:"size:100;index;not null" json:"client_id"`
+	Phase     StagePhase `gorm:"size:20;not null" json:"phase"`
+	TaskID    string     `gorm:"size:50" json:"task_id,omitempty"`
+	TaskName  string     `gorm:"size:100" json:"task_name,omitempty"`
+	Status    string     `gorm:"size:20;not null" json:"status"`
+	Progress  int        `gorm:"default:0" json:"progress"`
+	Message   string     `gorm:"type:text" json:"message,omitempty"`
+	Metrics   StringMap  `gorm:"type:jsonb" json:"metrics,omitempty"`
+
+	ReportedAt time.Time `gorm:"index;not null" json:"reported_at"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (StatusReport) TableName() string {
+	return "release_status_reports"
+}
+
+// Approval 审批记录
+type Approval struct {
+	ID         string         `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReleaseID  string         `gorm:"type:uuid;index;not null" json:"release_id"`
+	Status     ApprovalStatus `gorm:"size:20;not null;index" json:"status"`
+	Approvers  StringSlice    `gorm:"type:jsonb" json:"approvers,omitempty"`
+	ApprovedBy *string        `gorm:"size:100" json:"approved_by,omitempty"`
+	Comment    string         `gorm:"type:text" json:"comment,omitempty"`
+
+	ExpireAt  time.Time `gorm:"index" json:"expire_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (Approval) TableName() string {
+	return "release_approvals"
+}
+
+// ServiceDependency 服务依赖
+type ServiceDependency struct {
+	ID          string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ProjectID   string `gorm:"type:uuid;index;not null" json:"project_id"`
+	ServiceID   string `gorm:"type:uuid;index;not null" json:"service_id"`
+	DependsOnID string `gorm:"type:uuid;index;not null" json:"depends_on_id"`
+	Required    bool   `gorm:"default:true" json:"required"`
+	WaitReady   bool   `gorm:"default:true" json:"wait_ready"`
+	Timeout     int    `gorm:"default:300" json:"timeout"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ServiceDependency) TableName() string {
+	return "release_service_dependencies"
+}
+
+// DeployLog 部署日志（记录每次部署的详细信息）
+type DeployLog struct {
+	ID        string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	TaskID    string `gorm:"type:uuid;index;not null" json:"task_id"`
+	ProjectID string `gorm:"type:uuid;index;not null" json:"project_id"`
+	VersionID string `gorm:"type:uuid;index" json:"version_id"`
+	Version   string `gorm:"size:50;not null" json:"version"`
+	ClientID  string `gorm:"size:100;index;not null" json:"client_id"`
+
+	// 操作信息
+	Operation OperationType `gorm:"size:20;not null" json:"operation"`
+	IsCanary  bool          `gorm:"default:false" json:"is_canary"`
+
+	// 执行结果
+	Status   string `gorm:"size:20;not null;index" json:"status"` // success, failed, skipped, rollback
+	ExitCode int    `gorm:"default:0" json:"exit_code"`
+	Output   string `gorm:"type:text" json:"output,omitempty"`
+	Error    string `gorm:"type:text" json:"error,omitempty"`
+
+	// 时间信息
+	StartedAt  time.Time `gorm:"not null" json:"started_at"`
+	FinishedAt time.Time `gorm:"not null" json:"finished_at"`
+	Duration   int       `gorm:"default:0" json:"duration"` // 秒
+
+	// 执行者
+	CreatedBy string `gorm:"size:100" json:"created_by"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (DeployLog) TableName() string {
+	return "deploy_logs"
+}
+
+// DeployLogStatus 部署日志状态
+type DeployLogStatus string
+
+const (
+	DeployLogStatusSuccess  DeployLogStatus = "success"
+	DeployLogStatusFailed   DeployLogStatus = "failed"
+	DeployLogStatusSkipped  DeployLogStatus = "skipped"
+	DeployLogStatusRollback DeployLogStatus = "rollback"
+)
+
+// DeployStats 部署统计
+type DeployStats struct {
+	TotalCount   int64   `json:"total_count"`
+	SuccessCount int64   `json:"success_count"`
+	FailedCount  int64   `json:"failed_count"`
+	SuccessRate  float64 `json:"success_rate"`
+}
+
+// ==================== 数据库迁移 ====================
+
+// AllModels 所有模型列表
+var AllModels = []interface{}{
+	&Project{},
+	&Environment{},
+	&Target{},
+	&Variable{},
+	&Pipeline{},
+	&Version{},
+	&DeployTask{},
+	&DeployLog{},
+	&Release{},
+	&TargetInstallation{},
+	&StatusReport{},
+	&Approval{},
+	&ServiceDependency{},
+}
