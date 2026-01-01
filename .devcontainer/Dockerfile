@@ -1,18 +1,15 @@
-# Dev Container for QUIC Flow - CentOS 7.9
-FROM centos:7.9.2009
-
-# Use vault for CentOS 7 (EOL)
-RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo \
-    && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+# Dev Container for QUIC Flow - openEuler 22.03 LTS
+FROM openeuler/openeuler:22.03-lts
 
 # Install basic tools
-RUN yum install -y \
+RUN dnf install -y \
         gcc \
         make \
         git \
         curl \
         wget \
         unzip \
+        xz \
         net-tools \
         iputils \
         jq \
@@ -22,7 +19,7 @@ RUN yum install -y \
         sudo \
         openssh-clients \
         which \
-    && yum clean all
+    && dnf clean all
 
 # Install Go 1.23
 ENV GO_VERSION=1.23.4
@@ -46,10 +43,10 @@ RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
     && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest \
     && go install github.com/go-delve/delve/cmd/dlv@latest
 
-# Install Node.js 20 (via NodeSource)
-RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
-    && yum install -y nodejs \
-    && yum clean all
+# Install Node.js 20
+ENV NODE_VERSION=20.19.6
+RUN curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1 \
+    && npm install -g npm@latest
 
 # Create vscode user for devcontainer
 RUN useradd -m -s /bin/bash vscode \

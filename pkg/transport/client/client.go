@@ -54,6 +54,21 @@ type Client struct {
 
 	// 心跳
 	lastPongTime atomic.Value // time.Time - 最后收到 Pong 的时间
+
+	// SSH 处理器
+	sshHandler SSHStreamHandler
+	sshMu      sync.RWMutex
+}
+
+// SSHStreamHandler SSH 流处理函数类型
+type SSHStreamHandler func(stream *quic.Stream, conn *quic.Conn) error
+
+// SetSSHHandler 设置 SSH 流处理器
+func (c *Client) SetSSHHandler(handler SSHStreamHandler) {
+	c.sshMu.Lock()
+	defer c.sshMu.Unlock()
+	c.sshHandler = handler
+	c.logger.Info("SSH handler set")
 }
 
 // NewClient 创建新的客户端实例 (T027)
@@ -219,9 +234,16 @@ func (c *Client) reconnectLoop() {
 			// 连接断开，尝试重连
 			c.logger.Info("Connection lost, attempting to reconnect...")
 
-			// 指数退避
+			// 指数退避（使用 timer 以便能够响应 context 取消）
 			c.logger.Debug("Waiting before reconnect", "backoff", backoff)
-			time.Sleep(backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-c.ctx.Done():
+				timer.Stop()
+				c.logger.Debug("Reconnect loop stopped during backoff")
+				return
+			case <-timer.C:
+			}
 
 			// 增加重连尝试次数
 			c.reconnectAttempts.Add(1)
@@ -229,6 +251,14 @@ func (c *Client) reconnectLoop() {
 			// 尝试重连
 			if err := c.dial(); err != nil {
 				c.logger.Error("Reconnect failed", "attempt", c.reconnectAttempts.Load(), "error", err)
+
+				// 检查是否应该停止重连
+				select {
+				case <-c.ctx.Done():
+					c.logger.Debug("Reconnect loop stopped after dial failure")
+					return
+				default:
+				}
 
 				// 增加退避时间（指数退避）
 				backoff = time.Duration(math.Min(
@@ -325,6 +355,18 @@ func (c *Client) GetDispatcher() *dispatcher.Dispatcher {
 // GetMetrics 获取客户端指标快照
 func (c *Client) GetMetrics() *protocol.MetricsSnapshot {
 	return c.metrics.GetSnapshot()
+}
+
+// GetConnection 获取底层 QUIC 连接
+// 用于 SSH 等需要直接访问 QUIC 连接的功能
+func (c *Client) GetConnection() *quic.Conn {
+	return c.conn
+}
+
+// GetContext 获取客户端上下文
+// 用于控制依赖于客户端生命周期的 goroutine
+func (c *Client) GetContext() context.Context {
+	return c.ctx
 }
 
 // notifyDisconnect 通知连接断开

@@ -802,3 +802,13 @@ func (s *Server) AsyncBroadcast(msg *protocol.DataMessage) (int, []error) {
 	}
 	return s.Broadcast(msg)
 }
+
+// GetClientConnection 获取指定客户端的底层 QUIC 连接
+// 用于 SSH 等需要直接访问 QUIC 连接的功能
+func (s *Server) GetClientConnection(clientID string) *quic.Conn {
+	sess, err := s.sessions.Get(clientID)
+	if err != nil {
+		return nil
+	}
+	return sess.Conn
+}

@@ -527,3 +527,189 @@ func parseSize(sizeStr string) int64 {
 
 	return num * multiplier
 }
+
+// ============================================================================
+// 简化的磁盘 IOPS 检测（使用单一 FIO 命令）
+// ============================================================================
+
+// DiskIOPS 执行简化的磁盘 IOPS 检测
+// 使用命令: fio -iodepth=128 -numjobs=[cpu 核数] -bs=4k -time_based=1 -runtime=60s
+// 只返回 Read IOPS 和 Write IOPS
+// 命令类型: disk.iops
+// 用法: r.Register(command.CmdDiskIOPS, handlers.DiskIOPS)
+func DiskIOPS(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+	// 解析参数
+	var params command.DiskIOPSParams
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &params); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+	}
+
+	// 设置默认值
+	if params.Runtime == 0 {
+		params.Runtime = 60 // 默认60秒
+	}
+
+	response := &command.DiskIOPSResponse{
+		TestedAt: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	// 检查 fio 是否安装
+	if !checkFioInstalled() {
+		response.Success = false
+		response.Message = "fio is not installed. Please install with: yum install fio"
+		return json.Marshal(response)
+	}
+
+	// 获取要测试的磁盘列表
+	disks, err := getTestableDisks(ctx, params.Device)
+	if err != nil {
+		response.Success = false
+		response.Message = fmt.Sprintf("failed to get testable disks: %v", err)
+		return json.Marshal(response)
+	}
+
+	if len(disks) == 0 {
+		response.Success = false
+		response.Message = "no testable disks found (all disks are system disks or specified device not found)"
+		return json.Marshal(response)
+	}
+
+	// 获取 CPU 核心数
+	numCPU := runtime.NumCPU()
+
+	// 对每个磁盘执行测试
+	for _, disk := range disks {
+		result := runDiskIOPSTest(ctx, disk, params.Runtime, numCPU)
+		response.Results = append(response.Results, result)
+	}
+
+	response.Success = true
+	response.TotalDisks = len(response.Results)
+	response.Message = fmt.Sprintf("completed IOPS test for %d disk(s)", response.TotalDisks)
+
+	return json.Marshal(response)
+}
+
+// runDiskIOPSTest 对单个磁盘运行简化的 IOPS 测试
+// 使用命令: fio -iodepth=128 -numjobs=[cpu 核数] -bs=4k -time_based=1 -runtime=60s -rw=randrw
+func runDiskIOPSTest(ctx context.Context, disk *testDiskInfo, runtime int, numJobs int) *command.DiskIOPSResult {
+	result := &command.DiskIOPSResult{
+		Device:   disk.device,
+		Model:    disk.model,
+		Kind:     disk.kind,
+		TestPath: disk.mountPath,
+	}
+
+	startTime := time.Now()
+
+	// 确定测试文件路径
+	var testFile string
+	var isRawDevice bool
+
+	if strings.HasPrefix(disk.mountPath, "/dev/") {
+		// 裸设备测试
+		testFile = disk.mountPath
+		isRawDevice = true
+	} else {
+		// 文件系统测试
+		testFile = filepath.Join(disk.mountPath, fmt.Sprintf(".fio_iops_%s", disk.device))
+		defer os.Remove(testFile)
+	}
+
+	// 构建 FIO 命令参数
+	// fio -iodepth=128 -numjobs=[cpu 核数] -bs=4k -time_based=1 -runtime=60s -rw=randrw
+	args := []string{
+		fmt.Sprintf("-filename=%s", testFile),
+		"-direct=1",
+		"-ioengine=libaio",
+		"-bs=4k",
+		"-size=1G",
+		fmt.Sprintf("-numjobs=%d", numJobs),
+		"-iodepth=128",
+		"-time_based=1",
+		fmt.Sprintf("-runtime=%d", runtime),
+		"-thread",
+		"-rw=randrw",
+		"-rwmixread=50", // 50% 读 50% 写，便于获取独立的读写 IOPS
+		"-group_reporting",
+		"-name=iops_test",
+		"--output-format=json",
+	}
+
+	if isRawDevice {
+		args = append(args, "--allow_file_create=0")
+	}
+
+	cmd := exec.CommandContext(ctx, "fio", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		result.Error = fmt.Sprintf("fio failed: %v, output: %s", err, string(output))
+		result.Duration = int(time.Since(startTime).Seconds())
+		return result
+	}
+
+	// 解析 FIO JSON 输出
+	iopsResult := parseIOPSOutput(output)
+	if iopsResult != nil {
+		result.ReadIOPS = iopsResult.readIOPS
+		result.WriteIOPS = iopsResult.writeIOPS
+	}
+
+	result.Duration = int(time.Since(startTime).Seconds())
+	return result
+}
+
+// iopsOnlyResult 简化的 IOPS 结果
+type iopsOnlyResult struct {
+	readIOPS  float64
+	writeIOPS float64
+}
+
+// parseIOPSOutput 解析 FIO JSON 输出，只提取 Read/Write IOPS
+func parseIOPSOutput(output []byte) *iopsOnlyResult {
+	var fioJSON struct {
+		Jobs []struct {
+			Read struct {
+				Iops float64 `json:"iops"`
+			} `json:"read"`
+			Write struct {
+				Iops float64 `json:"iops"`
+			} `json:"write"`
+		} `json:"jobs"`
+	}
+
+	if err := json.Unmarshal(output, &fioJSON); err != nil {
+		return nil
+	}
+
+	if len(fioJSON.Jobs) == 0 {
+		return nil
+	}
+
+	job := fioJSON.Jobs[0]
+	return &iopsOnlyResult{
+		readIOPS:  job.Read.Iops,
+		writeIOPS: job.Write.Iops,
+	}
+}
+
+// FormatIOPSResult 格式化 IOPS 测试结果为文本
+func FormatIOPSResult(result *command.DiskIOPSResult) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("设备: %s (%s, %s)\n", result.Device, result.Model, result.Kind))
+	sb.WriteString(fmt.Sprintf("测试路径: %s\n", result.TestPath))
+	sb.WriteString(fmt.Sprintf("测试耗时: %d 秒\n", result.Duration))
+
+	if result.Error != "" {
+		sb.WriteString(fmt.Sprintf("\n【错误信息】\n  %s\n", result.Error))
+	} else {
+		sb.WriteString("\n【IOPS 结果】\n")
+		sb.WriteString(fmt.Sprintf("  Read IOPS:  %.0f\n", result.ReadIOPS))
+		sb.WriteString(fmt.Sprintf("  Write IOPS: %.0f\n", result.WriteIOPS))
+	}
+
+	return sb.String()
+}

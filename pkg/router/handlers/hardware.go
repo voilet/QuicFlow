@@ -218,9 +218,9 @@ func getPhysicalDisksFromPath(devicePath string) []string {
 // isStandardDevicePrefix 检查是否是标准设备前缀
 func isStandardDevicePrefix(name string) bool {
 	standardPrefixes := []string{
-		"sd", "hd", "vd", "xvd",  // SCSI, IDE, virtio, Xen
-		"nvme", "mmcblk",          // NVMe, eMMC
-		"loop", "ram", "dm-",      // 虚拟设备
+		"sd", "hd", "vd", "xvd", // SCSI, IDE, virtio, Xen
+		"nvme", "mmcblk", // NVMe, eMMC
+		"loop", "ram", "dm-", // 虚拟设备
 	}
 	for _, prefix := range standardPrefixes {
 		if strings.HasPrefix(name, prefix) {
@@ -487,11 +487,11 @@ func getDiskInfo(ctx context.Context) diskInfoResult {
 		if strings.HasPrefix(name, "loop") ||
 			strings.HasPrefix(name, "ram") ||
 			strings.HasPrefix(name, "dm-") ||
-			strings.HasPrefix(name, "bcache") ||  // bcache 缓存设备
-			strings.HasPrefix(name, "md") ||      // RAID 设备
-			strings.HasPrefix(name, "drbd") ||    // DRBD 设备
-			strings.HasPrefix(name, "rbd") ||     // Ceph RBD 设备
-			strings.HasPrefix(name, "nbd") {      // 网络块设备
+			strings.HasPrefix(name, "bcache") || // bcache 缓存设备
+			strings.HasPrefix(name, "md") || // RAID 设备
+			strings.HasPrefix(name, "drbd") || // DRBD 设备
+			strings.HasPrefix(name, "rbd") || // Ceph RBD 设备
+			strings.HasPrefix(name, "nbd") { // 网络块设备
 			continue
 		}
 
@@ -779,12 +779,12 @@ func isPhysicalNIC(name string) bool {
 
 	// 容器环境中的 eth*/ens*/enp*/eno* 等常见网卡命名也应该被识别
 	physicalPatterns := []string{
-		"eth",  // 传统命名 eth0, eth1
-		"ens",  // systemd 命名 ens33, ens192
-		"enp",  // systemd 命名 enp0s3
-		"eno",  // 板载网卡 eno1
-		"em",   // Dell/HP 服务器命名
-		"p",    // 某些服务器命名 p1p1
+		"eth", // 传统命名 eth0, eth1
+		"ens", // systemd 命名 ens33, ens192
+		"enp", // systemd 命名 enp0s3
+		"eno", // 板载网卡 eno1
+		"em",  // Dell/HP 服务器命名
+		"p",   // 某些服务器命名 p1p1
 	}
 
 	for _, pattern := range physicalPatterns {

@@ -227,10 +227,10 @@ QUIC Flow 使用 YAML 配置文件管理服务器参数，基于 [Viper](https:/
 
 项目提供两个预设配置文件：
 
-| 配置文件 | 模式 | 适用场景 |
-|---------|------|---------|
-| `config/server.yaml` | 标准模式 | 10K 连接，开发和小规模部署 |
-| `config/server-highperf.yaml` | 高性能模式 | 100K+ 连接，50K 并发任务 |
+| 配置文件                      | 模式       | 适用场景                   |
+| ----------------------------- | ---------- | -------------------------- |
+| `config/server.yaml`          | 标准模式   | 10K 连接，开发和小规模部署 |
+| `config/server-highperf.yaml` | 高性能模式 | 100K+ 连接，50K 并发任务   |
 
 ### 启动服务器
 
@@ -252,25 +252,25 @@ QUIC Flow 使用 YAML 配置文件管理服务器参数，基于 [Viper](https:/
 
 #### 标准模式 vs 高性能模式
 
-| 参数 | 标准模式 | 高性能模式 | 说明 |
-|------|---------|-----------|------|
-| `server.max_clients` | 10,000 | 150,000 | 最大客户端连接数 |
-| `message.worker_count` | 20 | 200 | Dispatcher Worker 数量 |
-| `message.task_queue_size` | 2,000 | 100,000 | 任务队列大小 |
-| `message.max_promises` | 50,000 | 150,000 | 最大 Promise 数量 |
-| `quic.max_incoming_streams` | 1,000 | 10,000 | 每连接最大并发流 |
-| `batch.enabled` | false | true | 批量执行功能 |
-| `batch.max_concurrency` | 5,000 | 5,000 | 批量执行并发数 |
+| 参数                        | 标准模式 | 高性能模式 | 说明                   |
+| --------------------------- | -------- | ---------- | ---------------------- |
+| `server.max_clients`        | 10,000   | 150,000    | 最大客户端连接数       |
+| `message.worker_count`      | 20       | 200        | Dispatcher Worker 数量 |
+| `message.task_queue_size`   | 2,000    | 100,000    | 任务队列大小           |
+| `message.max_promises`      | 50,000   | 150,000    | 最大 Promise 数量      |
+| `quic.max_incoming_streams` | 1,000    | 10,000     | 每连接最大并发流       |
+| `batch.enabled`             | false    | true       | 批量执行功能           |
+| `batch.max_concurrency`     | 5,000    | 5,000      | 批量执行并发数         |
 
 #### 完整配置示例
 
 ```yaml
 # 服务器基础配置
 server:
-  addr: ":8474"              # QUIC 监听地址
-  api_addr: ":8475"          # HTTP API 地址
-  high_perf: false           # 高性能模式标记
-  max_clients: 10000         # 最大客户端数
+  addr: ":8474" # QUIC 监听地址
+  api_addr: ":8475" # HTTP API 地址
+  high_perf: false # 高性能模式标记
+  max_clients: 10000 # 最大客户端数
 
 # TLS 配置
 tls:
@@ -279,44 +279,44 @@ tls:
 
 # QUIC 协议配置
 quic:
-  max_idle_timeout: 60                      # 空闲超时（秒）
-  max_incoming_streams: 1000                # 每连接最大并发流
-  max_incoming_uni_streams: 100             # 单向流数量
-  initial_stream_receive_window: 524288     # 初始流接收窗口（512KB）
-  max_stream_receive_window: 6291456        # 最大流接收窗口（6MB）
+  max_idle_timeout: 60 # 空闲超时（秒）
+  max_incoming_streams: 1000 # 每连接最大并发流
+  max_incoming_uni_streams: 100 # 单向流数量
+  initial_stream_receive_window: 524288 # 初始流接收窗口（512KB）
+  max_stream_receive_window: 6291456 # 最大流接收窗口（6MB）
   initial_connection_receive_window: 1048576 # 初始连接接收窗口（1MB）
-  max_connection_receive_window: 15728640   # 最大连接接收窗口（15MB）
+  max_connection_receive_window: 15728640 # 最大连接接收窗口（15MB）
 
 # 会话管理配置
 session:
-  heartbeat_interval: 15      # 心跳间隔（秒）
-  heartbeat_timeout: 45       # 心跳超时（秒）
+  heartbeat_interval: 15 # 心跳间隔（秒）
+  heartbeat_timeout: 45 # 心跳超时（秒）
   heartbeat_check_interval: 5 # 心跳检查间隔（秒）
-  max_timeout_count: 3        # 最大超时次数
+  max_timeout_count: 3 # 最大超时次数
 
 # 消息处理配置
 message:
-  worker_count: 20              # Dispatcher Worker 数量
-  task_queue_size: 2000         # 任务队列大小
-  handler_timeout: 30           # 处理超时（秒）
-  max_promises: 50000           # 最大 Promise 数量
+  worker_count: 20 # Dispatcher Worker 数量
+  task_queue_size: 2000 # 任务队列大小
+  handler_timeout: 30 # 处理超时（秒）
+  max_promises: 50000 # 最大 Promise 数量
   promise_warn_threshold: 40000 # Promise 警告阈值
-  default_message_timeout: 30   # 默认消息超时（秒）
+  default_message_timeout: 30 # 默认消息超时（秒）
 
 # 批量执行配置
 batch:
-  enabled: false         # 是否启用
-  max_concurrency: 5000  # 最大并发数
-  task_timeout: 60       # 单任务超时（秒）
-  job_timeout: 600       # 整体任务超时（秒）
-  max_retries: 2         # 最大重试次数
-  retry_interval: 1      # 重试间隔（秒）
+  enabled: false # 是否启用
+  max_concurrency: 5000 # 最大并发数
+  task_timeout: 60 # 单任务超时（秒）
+  job_timeout: 600 # 整体任务超时（秒）
+  max_retries: 2 # 最大重试次数
+  retry_interval: 1 # 重试间隔（秒）
 
 # 日志配置
 log:
-  level: "info"    # debug, info, warn, error
-  format: "text"   # text, json
-  file: ""         # 日志文件路径（空=stdout）
+  level: "info" # debug, info, warn, error
+  format: "text" # text, json
+  file: "" # 日志文件路径（空=stdout）
 ```
 
 ### 环境变量
@@ -447,15 +447,15 @@ data: {"type":"complete","summary":{"total":3,"success_count":3,"failed_count":0
 
 ```javascript
 // 使用 Fetch API 消费 SSE 流
-const response = await fetch('/api/command/stream', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+const response = await fetch("/api/command/stream", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    client_ids: ['client-001', 'client-002'],
-    command_type: 'exec_shell',
-    payload: { command: 'hostname' },
-    timeout: 30
-  })
+    client_ids: ["client-001", "client-002"],
+    command_type: "exec_shell",
+    payload: { command: "hostname" },
+    timeout: 30,
+  }),
 });
 
 const reader = response.body.getReader();
@@ -467,14 +467,14 @@ while (true) {
 
   const text = decoder.decode(value);
   // 解析 "data: {...}\n\n" 格式
-  const lines = text.split('\n\n');
+  const lines = text.split("\n\n");
   for (const line of lines) {
-    if (line.startsWith('data: ')) {
+    if (line.startsWith("data: ")) {
       const event = JSON.parse(line.slice(6));
-      if (event.type === 'result') {
-        console.log('收到结果:', event.result);
-      } else if (event.type === 'complete') {
-        console.log('全部完成:', event.summary);
+      if (event.type === "result") {
+        console.log("收到结果:", event.result);
+      } else if (event.type === "complete") {
+        console.log("全部完成:", event.summary);
       }
     }
   }
@@ -483,12 +483,12 @@ while (true) {
 
 ### 批量执行 vs 流式执行对比
 
-| 特性 | 批量执行 (`/command/multi`) | 流式执行 (`/command/stream`) |
-|------|---------------------------|------------------------------|
-| 返回方式 | 等待所有客户端完成后返回 | 实时返回每个结果 |
-| 用户体验 | 需要等待最慢的客户端 | 先完成的先显示 |
-| 技术实现 | 标准 HTTP JSON 响应 | Server-Sent Events (SSE) |
-| 适用场景 | 少量客户端、需要统一处理 | 大量客户端、需要实时反馈 |
+| 特性     | 批量执行 (`/command/multi`) | 流式执行 (`/command/stream`) |
+| -------- | --------------------------- | ---------------------------- |
+| 返回方式 | 等待所有客户端完成后返回    | 实时返回每个结果             |
+| 用户体验 | 需要等待最慢的客户端        | 先完成的先显示               |
+| 技术实现 | 标准 HTTP JSON 响应         | Server-Sent Events (SSE)     |
+| 适用场景 | 少量客户端、需要统一处理    | 大量客户端、需要实时反馈     |
 
 ## Batch Execution
 
@@ -644,14 +644,14 @@ hooks := &monitoring.EventHooks{
 
 ### 性能规格
 
-| 指标 | 标准模式 | 高性能模式 |
-|------|---------|-----------|
-| 最大连接数 | 10,000 | 100,000+ |
-| 并发任务数 | 2,000 | 50,000 |
+| 指标       | 标准模式      | 高性能模式     |
+| ---------- | ------------- | -------------- |
+| 最大连接数 | 10,000        | 100,000+       |
+| 并发任务数 | 2,000         | 50,000         |
 | 消息吞吐量 | 10,000+ msg/s | 100,000+ msg/s |
-| P50 延迟 | < 5ms | < 10ms |
-| P99 延迟 | < 50ms | < 100ms |
-| 每连接内存 | ~50KB | ~50KB |
+| P50 延迟   | < 5ms         | < 10ms         |
+| P99 延迟   | < 50ms        | < 100ms        |
+| 每连接内存 | ~50KB         | ~50KB          |
 
 ### Benchmarks
 

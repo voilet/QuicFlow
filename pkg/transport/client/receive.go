@@ -9,6 +9,7 @@ import (
 
 	"github.com/voilet/quic-flow/pkg/dispatcher"
 	"github.com/voilet/quic-flow/pkg/protocol"
+	quicssh "github.com/voilet/quic-flow/pkg/ssh"
 	"github.com/voilet/quic-flow/pkg/transport/codec"
 )
 
@@ -56,12 +57,44 @@ func (c *Client) receiveLoop() {
 // handleStream 处理单个流
 func (c *Client) handleStream(stream *quic.Stream) {
 	defer c.wg.Done()
-	defer stream.Close()
 
 	c.logger.Info("开始读取流中的帧")
 
+	// 首先尝试读取 SSH 头部
+	// TryReadHeader 会读取前 6 个字节，如果是 SSH 流则返回 header，否则返回已读取的字节
+	header, peekedBytes, err := quicssh.TryReadHeader(stream)
+	if err != nil {
+		c.logger.Error("读取流头部失败", "error", err)
+		stream.Close()
+		return
+	}
+
+	// 如果是 SSH 流，转发给 SSH 处理器
+	if header != nil && header.Type == quicssh.StreamTypeSSH {
+		c.logger.Info("检测到 SSH 流，转发给 SSH 处理器", "stream_id", stream.StreamID())
+		// SSH 流由 AcceptSSHStreams 处理，这里应该不会到达
+		// 但为了安全起见，如果到达这里，调用 SSH 处理器
+		if c.sshHandler != nil {
+			if err := c.sshHandler(stream, c.conn); err != nil {
+				c.logger.Error("SSH 流处理失败", "error", err)
+			}
+		} else {
+			c.logger.Error("收到 SSH 流但没有设置 SSH 处理器")
+			stream.Close()
+		}
+		return
+	}
+
+	// 不是 SSH 流，使用包装的 reader 继续处理普通消息
+	// peekedBytes 包含已读取的字节，需要先处理这些字节
+	wrappedStream := &prefixedReader{
+		prefix: peekedBytes,
+		reader: stream,
+		stream: stream,
+	}
+
 	// 读取帧（使用长度前缀协议）
-	frame, err := c.codec.ReadFrame(stream)
+	frame, err := c.codec.ReadFrame(wrappedStream)
 	if err != nil {
 		if err == io.EOF {
 			c.logger.Debug("流正常结束")
@@ -69,6 +102,7 @@ func (c *Client) handleStream(stream *quic.Stream) {
 			c.logger.Error("读取帧失败", "error", err)
 			c.metrics.RecordDecodingError()
 		}
+		stream.Close()
 		return
 	}
 
@@ -87,6 +121,24 @@ func (c *Client) handleStream(stream *quic.Stream) {
 	default:
 		c.logger.Warn("未知帧类型", "frame_type", frame.Type)
 	}
+
+	stream.Close()
+}
+
+// prefixedReader 包装 reader，先返回 prefix 中的字节
+type prefixedReader struct {
+	prefix []byte
+	reader io.Reader
+	stream *quic.Stream
+}
+
+func (r *prefixedReader) Read(p []byte) (int, error) {
+	if len(r.prefix) > 0 {
+		n := copy(p, r.prefix)
+		r.prefix = r.prefix[n:]
+		return n, nil
+	}
+	return r.reader.Read(p)
 }
 
 // handleData 处理数据消息

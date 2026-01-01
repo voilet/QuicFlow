@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
@@ -35,6 +36,13 @@ var (
 	benchRuntime    int
 	benchFormat     string
 	benchConcurrent bool
+
+	// SSH 参数
+	sshEnabled      bool
+	sshUser         string
+	sshPassword     string
+	sshShell        string
+	sshPortForward  bool
 )
 
 // rootCmd 根命令
@@ -77,6 +85,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&clientID, "id", "i", "client-001", "客户端 ID")
 	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", true, "跳过 TLS 证书验证（仅开发环境）")
 
+	// SSH 参数
+	rootCmd.Flags().BoolVar(&sshEnabled, "ssh", true, "启用 SSH 服务（允许服务器通过 QUIC 连接 SSH 到本机）")
+	rootCmd.Flags().StringVar(&sshUser, "ssh-user", "admin", "SSH 用户名")
+	rootCmd.Flags().StringVar(&sshPassword, "ssh-password", "admin123", "SSH 密码")
+	rootCmd.Flags().StringVar(&sshShell, "ssh-shell", "/bin/sh", "SSH 默认 Shell")
+	rootCmd.Flags().BoolVar(&sshPortForward, "ssh-port-forward", true, "允许 SSH 端口转发")
+
 	// hwinfo 子命令参数
 	hwinfoCmd.Flags().StringVarP(&hwinfoFormat, "format", "f", "json", "输出格式 (json|text)")
 
@@ -108,6 +123,30 @@ func runClient(cmd *cobra.Command, args []string) {
 	logger.Info("=== QUIC Backbone Client ===")
 	logger.Info("Version", "version", version.String())
 	logger.Info("Connecting to server", "server", serverAddr, "client_id", clientID)
+
+	// SSH 集成
+	var sshIntegration *SSHIntegration
+
+	if sshEnabled {
+		logger.Info("SSH service enabled", "user", sshUser, "shell", sshShell)
+		var err error
+		sshIntegration, err = NewSSHIntegration(&SSHConfig{
+			Enabled:          true,
+			User:             sshUser,
+			Password:         sshPassword,
+			Shell:            sshShell,
+			AllowPortForward: sshPortForward,
+		}, logger)
+		if err != nil {
+			logger.Error("Failed to create SSH integration", "error", err)
+			os.Exit(1)
+		}
+		if err := sshIntegration.Start(); err != nil {
+			logger.Error("Failed to start SSH server", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("SSH server ready (will handle streams via receiveLoop)")
+	}
 
 	// 创建客户端配置
 	config := client.NewDefaultClientConfig(clientID)
@@ -144,6 +183,14 @@ func runClient(cmd *cobra.Command, args []string) {
 	c.SetDispatcher(disp)
 	logger.Info("Dispatcher attached to client")
 
+	// 设置 SSH 处理器（如果启用）
+	if sshEnabled && sshIntegration != nil {
+		c.SetSSHHandler(func(stream *quic.Stream, conn *quic.Conn) error {
+			return sshIntegration.HandleStream(stream, conn)
+		})
+		logger.Info("SSH handler attached to client")
+	}
+
 	// 连接到服务器
 	if err := c.Connect(serverAddr); err != nil {
 		logger.Error("Failed to connect", "error", err)
@@ -151,10 +198,15 @@ func runClient(cmd *cobra.Command, args []string) {
 
 	logger.Info("Client started (auto-reconnect enabled)")
 	logger.Info("Ready to receive and execute commands")
+	if sshEnabled {
+		logger.Info("SSH service available for remote access (via receiveLoop)")
+	}
 	logger.Info("Press Ctrl+C to stop")
 
+	// 注意：SSH 流现在由 receiveLoop 中的 SSH handler 处理，不再需要单独的 AcceptSSHStreams
+
 	// 定期打印状态
-	go printStatus(c, cmdRouter)
+	go printStatus(c, cmdRouter, sshEnabled)
 
 	// 等待中断信号
 	sigChan := make(chan os.Signal, 1)
@@ -162,7 +214,7 @@ func runClient(cmd *cobra.Command, args []string) {
 	<-sigChan
 
 	// 优雅关闭
-	shutdown(logger, disp, c)
+	shutdown(logger, disp, c, sshIntegration)
 }
 
 // runHwinfo 运行硬件信息获取（本地模式）
@@ -360,7 +412,7 @@ func setupDispatcher(logger *monitoring.Logger, c *client.Client, cmdRouter *rou
 }
 
 // printStatus 定期打印状态
-func printStatus(c *client.Client, cmdRouter interface{ ListCommands() []string }) {
+func printStatus(c *client.Client, cmdRouter interface{ ListCommands() []string }, sshEnabled bool) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -375,13 +427,25 @@ func printStatus(c *client.Client, cmdRouter interface{ ListCommands() []string 
 		fmt.Printf("Last Pong: %v ago\n", lastPong.Round(time.Second))
 		fmt.Printf("Heartbeats Sent: %d\n", metrics.ConnectedClients)
 		fmt.Printf("Registered Commands: %v\n", cmdRouter.ListCommands())
+		if sshEnabled {
+			fmt.Printf("SSH Service: enabled\n")
+		}
 		fmt.Println()
 	}
 }
 
 // shutdown 优雅关闭
-func shutdown(logger *monitoring.Logger, disp *dispatcher.Dispatcher, c *client.Client) {
+func shutdown(logger *monitoring.Logger, disp *dispatcher.Dispatcher, c *client.Client, sshIntegration *SSHIntegration) {
 	logger.Info("Shutting down client...")
+
+	// 停止 SSH 服务
+	if sshIntegration != nil {
+		if err := sshIntegration.Stop(); err != nil {
+			logger.Error("Error stopping SSH server", "error", err)
+		} else {
+			logger.Info("SSH server stopped")
+		}
+	}
 
 	// 停止 Dispatcher
 	disp.Stop()

@@ -176,58 +176,20 @@
   - 预计：2 小时
 
 #### 功能增强
-- [ ] **T067**: 在 QUIC 流上运行 SSH 协议层
+- [x] **T067**: 在 QUIC 流上运行 SSH 协议层 ✅
   - 描述：使用 `golang.org/x/crypto/ssh` 包，将 QUIC 流包装成 `net.Conn`，在其上建立 SSH 握手
-  - 架构设计：
-    - **传输层**：UDP
-    - **隧道层**：QUIC (多路复用、加密、拥塞控制)
-    - **应用层**：SSH (权限控制、Shell 交互、文件传输)
-  - 实现步骤：
-    1. **实现 StreamConn 适配器**
-       - 将 `quic.Stream` 转换为 `net.Conn`
-       - 实现 `LocalAddr()`, `RemoteAddr()`, `SetDeadline()` 等方法
-       - 文件：`pkg/ssh/adapter.go`
-    2. **客户端（内网侧）：运行 SSH Server**
-       - 监听来自 QUIC 的流
-       - 在 Stream 上启动 SSH 服务
-       - 配置 SSH Server（主机密钥、密码验证）
-       - 处理 SSH 请求（Shell、端口转发等）
-       - 文件：`pkg/ssh/server.go`
-    3. **服务端（公网侧）：作为 SSH Client**
-       - 主动打开 QUIC Stream
-       - 在 Stream 上运行 SSH Client 逻辑
-       - 配置 SSH 客户端认证
-       - 支持多会话复用（每个会话一个独立的 QUIC Stream）
-       - 文件：`pkg/ssh/client.go`
-    4. **Stream 类型识别**
-       - 在 `AcceptStream` 后发送握手信号（魔数）
-       - 区分业务数据、文件传输、反向 SSH 等 Stream 类型
-       - 文件：`pkg/ssh/protocol.go`
-    5. **配置和文档**
-       - 添加 SSH 相关配置选项
-       - 编写使用文档和示例
-       - 文件：`pkg/ssh/config.go`, `docs/ssh-over-quic.md`
-  - 优势：
-    - ✅ 协议分层清晰，职责明确
-    - ✅ 双重加密：QUIC 层 + SSH 层
-    - ✅ 内网穿透：反向 SSH 通道永久可用
-    - ✅ 多路复用：同一 QUIC 连接可开启多个 SSH 会话
-    - ✅ 复用现有 QUIC 长连接，无需额外连接
-  - 技术要点：
-    - 使用 `golang.org/x/crypto/ssh` 标准库
-    - `quic.Stream` 实现 `io.Reader` 和 `io.Writer`
-    - 适配器模式：`StreamConn` 实现 `net.Conn` 接口
-    - `ssh.NewClientConn` / `ssh.NewServerConn` 需要标准 `net.Conn`
-  - 安全考虑：
-    - QUIC 层加密 + SSH 层加密双重保护
-    - 即使 QUIC 认证被攻破，仍需 SSH 密钥/密码
-    - 生产环境建议使用密钥认证而非密码
-  - 参考：
-    - `golang.org/x/crypto/ssh` 官方文档
-    - QUIC Stream 接口：`github.com/quic-go/quic-go`
-  - 预计：15-20 小时
-  - 优先级：⭐⭐⭐
-  - 状态：待开始
+  - 实现文件：
+    - `pkg/ssh/adapter.go` - StreamConn 适配器
+    - `pkg/ssh/protocol.go` - 流类型识别协议
+    - `pkg/ssh/config.go` - SSH 配置选项
+    - `pkg/ssh/server.go` - SSH 服务器
+    - `pkg/ssh/client.go` - SSH 客户端
+    - `pkg/ssh/manager.go` - SSH 管理器
+    - `pkg/ssh/errors.go` - 错误定义
+  - 文档：`docs/ssh-over-quic.md`
+  - 示例：`examples/ssh/main.go`
+  - 测试：`pkg/ssh/*_test.go`
+  - 完成日期：2025-12-31
 
 - [ ] WebSocket 支持 (可选)
   - 描述：为 Web 客户端提供 WebSocket 接口

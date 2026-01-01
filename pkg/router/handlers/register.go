@@ -40,6 +40,7 @@ func RegisterBuiltinHandlers(r *router.Router, cfg *Config) {
 
 	// 磁盘测试处理器
 	r.Register(command.CmdDiskBenchmark, DiskBenchmark)
+	r.Register(command.CmdDiskIOPS, DiskIOPS)
 }
 
 // ============================================================================
@@ -58,4 +59,5 @@ const (
 	CmdNetworkSpeed      = command.CmdNetworkSpeed
 	CmdHardwareInfo      = command.CmdHardwareInfo
 	CmdDiskBenchmark     = command.CmdDiskBenchmark
+	CmdDiskIOPS          = command.CmdDiskIOPS
 )

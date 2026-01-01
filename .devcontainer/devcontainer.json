@@ -1,5 +1,5 @@
 {
-  "name": "QUIC Flow Dev (CentOS 7.9)",
+  "name": "QUIC Flow Dev (openEuler 22.03)",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
@@ -28,17 +28,17 @@
       }
     }
   },
-  "forwardPorts": [8474, 8475, 5173],
+  "forwardPorts": [3000, 8474, 8475],
   "portsAttributes": {
+    "3000": {
+      "label": "Vite Dev Server"
+    },
     "8474": {
       "label": "QUIC Server",
       "protocol": "https"
     },
     "8475": {
       "label": "HTTP API"
-    },
-    "5173": {
-      "label": "Vite Dev Server"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
