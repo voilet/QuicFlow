@@ -77,3 +77,4 @@ web/node_modules/
 web/dist/
 hd.json
 client
+.claude/settings.local.json
