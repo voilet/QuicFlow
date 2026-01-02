@@ -50,6 +50,10 @@ func RegisterBuiltinHandlers(r *router.Router, cfg *Config) {
 	r.Register(command.CmdContainerCollect, ContainerCollect)
 	r.Register(command.CmdContainerReport, ContainerReport)
 	r.Register(command.CmdContainerList, ContainerList)
+
+	// K8s Pod 采集处理器
+	r.Register(command.CmdK8sCollect, K8sCollect)
+	r.Register(command.CmdK8sReport, K8sReport)
 }
 
 // ============================================================================
@@ -76,4 +80,7 @@ const (
 	CmdContainerCollect = command.CmdContainerCollect
 	CmdContainerReport  = command.CmdContainerReport
 	CmdContainerList    = command.CmdContainerList
+	// K8s Pod 采集
+	CmdK8sCollect = command.CmdK8sCollect
+	CmdK8sReport  = command.CmdK8sReport
 )

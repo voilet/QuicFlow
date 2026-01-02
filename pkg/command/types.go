@@ -69,6 +69,10 @@ const (
 	CmdContainerCollect = "container.collect" // 采集容器信息
 	CmdContainerReport  = "container.report"  // 上报容器信息
 	CmdContainerList    = "container.list"    // 列出容器
+
+	// K8s Pod 采集和上报命令
+	CmdK8sCollect = "k8s.collect" // 采集 K8s Pod 信息
+	CmdK8sReport  = "k8s.report"  // 上报 K8s Pod 信息
 )
 
 // ============================================================================
@@ -966,4 +970,78 @@ type ContainerListResult struct {
 	Success    bool               `json:"success"`
 	Containers []ContainerInfoCmd `json:"containers"`
 	Error      string             `json:"error,omitempty"`
+}
+
+// ============================================================================
+// K8s Pod 采集和上报相关结构
+// ============================================================================
+
+// K8sCollectParams k8s.collect 命令的参数
+type K8sCollectParams struct {
+	APIServer     string `json:"api_server,omitempty"`     // API Server 地址
+	Token         string `json:"token,omitempty"`          // Bearer Token
+	TokenFile     string `json:"token_file,omitempty"`     // Token 文件路径
+	Namespace     string `json:"namespace,omitempty"`      // 命名空间（空表示所有）
+	LabelSelector string `json:"label_selector,omitempty"` // 标签选择器
+	InCluster     bool   `json:"in_cluster,omitempty"`     // 是否在集群内运行
+	InsecureTLS   bool   `json:"insecure_tls,omitempty"`   // 跳过 TLS 验证
+	Timeout       int    `json:"timeout,omitempty"`        // 超时时间（秒）
+}
+
+// K8sContainerStatusCmd 容器状态
+type K8sContainerStatusCmd struct {
+	Name         string `json:"name"`                   // 容器名称
+	Image        string `json:"image"`                  // 镜像
+	Ready        bool   `json:"ready"`                  // 是否就绪
+	RestartCount int    `json:"restart_count"`          // 重启次数
+	State        string `json:"state"`                  // 状态（running/waiting/terminated）
+	StartedAt    string `json:"started_at,omitempty"`   // 启动时间
+	Reason       string `json:"reason,omitempty"`       // 原因
+	Message      string `json:"message,omitempty"`      // 消息
+}
+
+// K8sPodInfoCmd Pod 信息
+type K8sPodInfoCmd struct {
+	Name         string                  `json:"name"`                    // Pod 名称
+	Namespace    string                  `json:"namespace"`               // 命名空间
+	UID          string                  `json:"uid"`                     // UID
+	Status       string                  `json:"status"`                  // 状态
+	Phase        string                  `json:"phase"`                   // 阶段
+	HostIP       string                  `json:"host_ip,omitempty"`       // 主机 IP
+	PodIP        string                  `json:"pod_ip,omitempty"`        // Pod IP
+	StartTime    string                  `json:"start_time,omitempty"`    // 启动时间
+	Labels       map[string]string       `json:"labels,omitempty"`        // 标签
+	Containers   []K8sContainerStatusCmd `json:"containers,omitempty"`    // 容器列表
+	RestartCount int                     `json:"restart_count"`           // 总重启次数
+	Ready        bool                    `json:"ready"`                   // 是否就绪
+}
+
+// K8sCollectResult k8s.collect 命令的结果
+type K8sCollectResult struct {
+	Success      bool            `json:"success"`                 // 是否成功
+	Pods         []K8sPodInfoCmd `json:"pods,omitempty"`          // Pod 列表
+	TotalCount   int             `json:"total_count"`             // 总数
+	RunningCount int             `json:"running_count"`           // 运行中数量
+	ReadyCount   int             `json:"ready_count"`             // 就绪数量
+	PendingCount int             `json:"pending_count"`           // 等待中数量
+	FailedCount  int             `json:"failed_count"`            // 失败数量
+	Error        string          `json:"error,omitempty"`         // 错误信息
+}
+
+// K8sReportParams k8s.report 命令的参数
+type K8sReportParams struct {
+	ClientID     string          `json:"client_id"`               // 客户端 ID
+	ProjectID    string          `json:"project_id,omitempty"`    // 项目 ID
+	Namespace    string          `json:"namespace,omitempty"`     // 命名空间
+	Pods         []K8sPodInfoCmd `json:"pods"`                    // Pod 列表
+	TotalCount   int             `json:"total_count"`             // 总数
+	RunningCount int             `json:"running_count"`           // 运行中数量
+	ReadyCount   int             `json:"ready_count"`             // 就绪数量
+	ReportedAt   string          `json:"reported_at"`             // 上报时间
+}
+
+// K8sReportResult k8s.report 命令的结果
+type K8sReportResult struct {
+	Success bool   `json:"success"`           // 是否成功
+	Error   string `json:"error,omitempty"`   // 错误信息
 }
