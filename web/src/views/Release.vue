@@ -423,7 +423,7 @@
     </el-row>
 
     <!-- 新建/编辑项目对话框 -->
-    <el-dialog v-model="projectDialogVisible" :title="editingProject ? '编辑项目' : '新建项目'" width="600px">
+    <el-dialog v-model="projectDialogVisible" :title="editingProject ? '编辑项目' : '新建项目'" width="600px" destroy-on-close>
       <el-form :model="projectForm" :rules="projectRules" ref="projectFormRef" label-width="100px">
         <el-form-item label="项目名称" prop="name">
           <el-input v-model="projectForm.name" placeholder="输入项目名称" />
@@ -470,10 +470,22 @@
             <el-input v-model="projectForm.gitpull_config.password" type="password" show-password placeholder="密码" />
           </el-form-item>
           <el-form-item label="部署前脚本">
-            <el-input v-model="projectForm.gitpull_config.pre_script" type="textarea" rows="3" placeholder="#!/bin/bash&#10;# 拉取代码前执行的脚本（可选）" />
+            <CodeEditor
+              :key="`project-pre-script-${projectDialogVisible}`"
+              v-model="projectForm.gitpull_config.pre_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# 拉取代码前执行的脚本（可选）"
+            />
           </el-form-item>
           <el-form-item label="部署后脚本">
-            <el-input v-model="projectForm.gitpull_config.post_script" type="textarea" rows="3" placeholder="#!/bin/bash&#10;# 拉取代码后执行的脚本（可选）" />
+            <CodeEditor
+              :key="`project-post-script-${projectDialogVisible}`"
+              v-model="projectForm.gitpull_config.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# 拉取代码后执行的脚本（可选）"
+            />
           </el-form-item>
         </template>
 
@@ -602,7 +614,7 @@
     </el-dialog>
 
     <!-- 新建版本对话框 -->
-    <el-dialog v-model="versionDialogVisible" title="新建版本" width="800px">
+    <el-dialog v-model="versionDialogVisible" title="新建版本" width="800px" destroy-on-close>
       <el-form :model="versionForm" :rules="versionRules" ref="versionFormRef" label-width="100px">
         <el-form-item label="版本号" prop="version">
           <el-input v-model="versionForm.version" placeholder="如: 1.0.0" />
@@ -660,6 +672,7 @@
           <el-divider content-position="left">部署脚本（可选）</el-divider>
           <el-form-item label="部署前脚本">
             <CodeEditor
+              :key="`pre-script-${versionDialogVisible}`"
               v-model="versionForm.pre_script"
               language="shell"
               height="150px"
@@ -668,6 +681,7 @@
           </el-form-item>
           <el-form-item label="部署后脚本">
             <CodeEditor
+              :key="`post-script-${versionDialogVisible}`"
               v-model="versionForm.post_script"
               language="shell"
               height="150px"
@@ -685,7 +699,12 @@
           </el-form-item>
 
           <el-form-item label="环境变量">
-            <el-input v-model="versionForm.container_env" type="textarea" rows="3" placeholder="KEY1=value1&#10;KEY2=value2" />
+            <CodeEditor
+              v-model="versionForm.container_env"
+              language="properties"
+              height="120px"
+              placeholder="KEY1=value1&#10;KEY2=value2"
+            />
           </el-form-item>
 
           <el-divider content-position="left">部署脚本（可选）</el-divider>
@@ -743,7 +762,12 @@
 
           <el-divider content-position="left">环境变量（可选）</el-divider>
           <el-form-item label="环境变量">
-            <el-input v-model="versionForm.container_env" type="textarea" rows="3" placeholder="KEY1=value1&#10;KEY2=value2" />
+            <CodeEditor
+              v-model="versionForm.container_env"
+              language="properties"
+              height="120px"
+              placeholder="KEY1=value1&#10;KEY2=value2"
+            />
           </el-form-item>
 
           <el-divider content-position="left">YAML 配置（可选）</el-divider>
@@ -911,7 +935,12 @@
           </el-form-item>
 
           <el-form-item label="覆盖环境变量" v-if="taskForm.operation !== 'uninstall'">
-            <el-input v-model="taskForm.container_env" type="textarea" rows="2" placeholder="KEY=value（每行一个，覆盖默认配置）" />
+            <CodeEditor
+              v-model="taskForm.container_env"
+              language="properties"
+              height="100px"
+              placeholder="KEY=value（每行一个，覆盖默认配置）"
+            />
           </el-form-item>
 
           <el-form-item label="拉取策略" v-if="taskForm.operation !== 'uninstall'">
