@@ -60,6 +60,15 @@ const (
 	CmdContainerDeploy  = "container.deploy"  // 容器部署
 	CmdGitPullDeploy    = "gitpull.deploy"    // Git 拉取部署
 	CmdGitVersions      = "git.versions"      // 获取 Git 仓库版本信息
+
+	// 进程采集和上报命令
+	CmdProcessCollect = "process.collect" // 采集进程信息
+	CmdProcessReport  = "process.report"  // 上报进程信息
+
+	// 容器采集和上报命令
+	CmdContainerCollect = "container.collect" // 采集容器信息
+	CmdContainerReport  = "container.report"  // 上报容器信息
+	CmdContainerList    = "container.list"    // 列出容器
 )
 
 // ============================================================================
@@ -573,6 +582,10 @@ type ReleaseExecuteParams struct {
 	Environment map[string]string    `json:"environment,omitempty"` // 环境变量
 	Timeout     int                  `json:"timeout,omitempty"`     // 超时时间（秒）
 	Interpreter string               `json:"interpreter,omitempty"` // 脚本解释器（默认 /bin/bash）
+
+	// 进程脱离选项
+	DetachProcess bool   `json:"detach_process,omitempty"` // 是否脱离进程（脚本启动的进程独立于Client运行）
+	DetachMethod  string `json:"detach_method,omitempty"`  // 脱离方式: setsid, nohup, systemd
 }
 
 // ReleaseExecuteResult release.execute 命令的结果
@@ -829,4 +842,128 @@ type GitVersionsResult struct {
 	CurrentCommit string      `json:"current_commit,omitempty"` // 当前 commit（如果已 clone）
 	CurrentBranch string      `json:"current_branch,omitempty"` // 当前分支（如果已 clone）
 	Error         string      `json:"error,omitempty"`          // 错误信息
+}
+
+// ============================================================================
+// 进程采集和上报相关结构
+// ============================================================================
+
+// ProcessMatchRuleCmd 进程匹配规则
+type ProcessMatchRuleCmd struct {
+	Type    string `json:"type"`    // name, cmdline, pidfile, port
+	Pattern string `json:"pattern"` // 匹配模式
+	Name    string `json:"name"`    // 显示名称
+}
+
+// ProcessCollectParams process.collect 命令的参数
+type ProcessCollectParams struct {
+	ProjectID string                `json:"project_id,omitempty"` // 项目ID
+	Rules     []ProcessMatchRuleCmd `json:"rules"`                // 匹配规则
+	Timeout   int                   `json:"timeout,omitempty"`    // 超时时间（秒）
+}
+
+// ProcessInfoCmd 进程信息
+type ProcessInfoCmd struct {
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	Cmdline    string  `json:"cmdline"`
+	StartTime  string  `json:"start_time"`
+	Status     string  `json:"status"`      // running, sleeping, zombie
+	CPUPercent float64 `json:"cpu_percent"`
+	MemoryMB   float64 `json:"memory_mb"`
+	MemoryPct  float64 `json:"memory_pct"`
+	MatchedBy  string  `json:"matched_by"`  // 匹配规则名称
+}
+
+// ProcessCollectResult process.collect 命令的结果
+type ProcessCollectResult struct {
+	Success   bool             `json:"success"`
+	Processes []ProcessInfoCmd `json:"processes"`
+	Error     string           `json:"error,omitempty"`
+}
+
+// ProcessReportParams process.report 命令的参数
+type ProcessReportParams struct {
+	ClientID   string           `json:"client_id"`
+	ProjectID  string           `json:"project_id"`
+	ReleaseID  string           `json:"release_id,omitempty"`
+	Version    string           `json:"version,omitempty"`
+	Processes  []ProcessInfoCmd `json:"processes"`
+	ReportedAt string           `json:"reported_at"`
+}
+
+// ProcessReportResult process.report 命令的结果
+type ProcessReportResult struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ============================================================================
+// 容器采集和上报相关结构
+// ============================================================================
+
+// ContainerCollectParams container.collect 命令的参数
+type ContainerCollectParams struct {
+	Prefixes []string `json:"prefixes,omitempty"` // 容器名称前缀过滤
+	All      bool     `json:"all"`                // 是否包含所有容器（包括已停止的）
+	Timeout  int      `json:"timeout,omitempty"`  // 超时时间（秒）
+}
+
+// ContainerInfoCmd 容器信息
+type ContainerInfoCmd struct {
+	ContainerID   string  `json:"container_id"`
+	ContainerName string  `json:"container_name"`
+	Image         string  `json:"image"`
+	Status        string  `json:"status"`     // running, exited, paused
+	State         string  `json:"state"`      // created, running, paused, restarting, removing, exited, dead
+	CreatedAt     string  `json:"created_at"`
+	StartedAt     string  `json:"started_at"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryUsage   int64   `json:"memory_usage"`   // bytes
+	MemoryLimit   int64   `json:"memory_limit"`   // bytes
+	MemoryPercent float64 `json:"memory_percent"`
+	NetworkRx     int64   `json:"network_rx"`     // bytes
+	NetworkTx     int64   `json:"network_tx"`     // bytes
+	MatchedPrefix string  `json:"matched_prefix,omitempty"`
+	MatchedProject string `json:"matched_project,omitempty"`
+}
+
+// ContainerCollectResult container.collect 命令的结果
+type ContainerCollectResult struct {
+	Success       bool               `json:"success"`
+	Containers    []ContainerInfoCmd `json:"containers"`
+	DockerVersion string             `json:"docker_version,omitempty"`
+	TotalCount    int                `json:"total_count"`
+	RunningCount  int                `json:"running_count"`
+	Error         string             `json:"error,omitempty"`
+}
+
+// ContainerReportParams container.report 命令的参数
+type ContainerReportParams struct {
+	ClientID      string             `json:"client_id"`
+	ProjectID     string             `json:"project_id,omitempty"`
+	Containers    []ContainerInfoCmd `json:"containers"`
+	DockerVersion string             `json:"docker_version,omitempty"`
+	TotalCount    int                `json:"total_count"`
+	RunningCount  int                `json:"running_count"`
+	ReportedAt    string             `json:"reported_at"`
+}
+
+// ContainerReportResult container.report 命令的结果
+type ContainerReportResult struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ContainerListParams container.list 命令的参数
+type ContainerListParams struct {
+	All      bool     `json:"all"`                // 是否包含所有容器
+	Prefixes []string `json:"prefixes,omitempty"` // 名称前缀过滤
+}
+
+// ContainerListResult container.list 命令的结果
+type ContainerListResult struct {
+	Success    bool               `json:"success"`
+	Containers []ContainerInfoCmd `json:"containers"`
+	Error      string             `json:"error,omitempty"`
 }

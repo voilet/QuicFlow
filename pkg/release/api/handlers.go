@@ -142,6 +142,18 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 		release.GET("/projects/:id/stats", api.GetProjectDeployStats)
 		release.GET("/stats", api.GetDeployStats)
 
+		// 安装信息（版本升级增强）
+		release.GET("/projects/:id/installations", api.ListProjectInstallations)
+
+		// 进程上报
+		release.POST("/process-report", api.ReceiveProcessReport)
+		release.GET("/projects/:id/processes", api.ListProjectProcesses)
+
+		// 容器上报
+		release.POST("/container-report", api.ReceiveContainerReport)
+		release.GET("/projects/:id/containers", api.ListProjectContainers)
+		release.GET("/containers/overview", api.GetContainersOverview)
+
 		// 脚本验证
 		release.POST("/validate-script", api.ValidateScript)
 
@@ -1134,7 +1146,9 @@ func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
 		ProjectID         string     `json:"project_id" binding:"required"`
 		VersionID         string     `json:"version_id" binding:"required"`
 		Operation         string     `json:"operation" binding:"required"`
-		ClientIDs         []string   `json:"client_ids" binding:"required"`
+		ClientIDs         []string   `json:"client_ids"`
+		AutoSelectClients bool       `json:"auto_select_clients"`
+		SourceVersion     string     `json:"source_version"`
 		ScheduleType      string     `json:"schedule_type"`
 		ScheduleFrom      *time.Time `json:"schedule_from"`
 		ScheduleTo        *time.Time `json:"schedule_to"`
@@ -1155,6 +1169,53 @@ func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
 	var version models.Version
 	if err := api.db.First(&version, "id = ?", req.VersionID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+		return
+	}
+
+	// 处理自动选择客户端
+	clientIDs := req.ClientIDs
+	selectedFromVersion := ""
+	if req.AutoSelectClients {
+		// 查询已安装的目标
+		var installations []models.TargetInstallation
+		query := api.db.Where("project_id = ?", req.ProjectID)
+		if req.SourceVersion != "" {
+			query = query.Where("version = ?", req.SourceVersion)
+			selectedFromVersion = req.SourceVersion
+		}
+		if err := query.Find(&installations).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to query installations: " + err.Error()})
+			return
+		}
+
+		// 从安装记录中提取 ClientID
+		clientIDSet := make(map[string]bool)
+		for _, inst := range installations {
+			var target models.Target
+			if err := api.db.First(&target, "id = ?", inst.TargetID).Error; err == nil {
+				if target.ClientID != "" {
+					clientIDSet[target.ClientID] = true
+				}
+			}
+		}
+
+		clientIDs = make([]string, 0, len(clientIDSet))
+		for clientID := range clientIDSet {
+			clientIDs = append(clientIDs, clientID)
+		}
+
+		if len(clientIDs) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "no installed clients found for auto selection",
+			})
+			return
+		}
+	} else if len(clientIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "client_ids is required when auto_select_clients is false",
+		})
 		return
 	}
 
@@ -1179,29 +1240,32 @@ func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
 	}
 
 	task := &models.DeployTask{
-		ProjectID:         req.ProjectID,
-		VersionID:         req.VersionID,
-		Version:           version.Version,
-		Operation:         models.OperationType(req.Operation),
-		ClientIDs:         req.ClientIDs,
-		ScheduleType:      scheduleType,
-		ScheduleFrom:      req.ScheduleFrom,
-		ScheduleTo:        req.ScheduleTo,
-		CanaryEnabled:     req.CanaryEnabled,
-		CanaryPercent:     canaryPercent,
-		CanaryDuration:    canaryDuration,
-		CanaryAutoPromote: req.CanaryAutoPromote,
-		FailureStrategy:   failureStrategy,
-		AutoRollback:      req.AutoRollback,
-		Status:            "pending",
-		TotalCount:        len(req.ClientIDs),
-		PendingCount:      len(req.ClientIDs),
-		CreatedBy:         "admin", // TODO: 从认证获取
+		ProjectID:           req.ProjectID,
+		VersionID:           req.VersionID,
+		Version:             version.Version,
+		Operation:           models.OperationType(req.Operation),
+		ClientIDs:           clientIDs,
+		AutoSelectClients:   req.AutoSelectClients,
+		SourceVersion:       req.SourceVersion,
+		SelectedFromVersion: selectedFromVersion,
+		ScheduleType:        scheduleType,
+		ScheduleFrom:        req.ScheduleFrom,
+		ScheduleTo:          req.ScheduleTo,
+		CanaryEnabled:       req.CanaryEnabled,
+		CanaryPercent:       canaryPercent,
+		CanaryDuration:      canaryDuration,
+		CanaryAutoPromote:   req.CanaryAutoPromote,
+		FailureStrategy:     failureStrategy,
+		AutoRollback:        req.AutoRollback,
+		Status:              "pending",
+		TotalCount:          len(clientIDs),
+		PendingCount:        len(clientIDs),
+		CreatedBy:           "admin", // TODO: 从认证获取
 	}
 
 	// 初始化结果
-	results := make(models.DeployTaskResults, len(req.ClientIDs))
-	for i, clientID := range req.ClientIDs {
+	results := make(models.DeployTaskResults, len(clientIDs))
+	for i, clientID := range clientIDs {
 		results[i] = models.DeployTaskResult{
 			ClientID: clientID,
 			Status:   "pending",
@@ -2084,5 +2148,398 @@ func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
 		"current_commit": result.CurrentCommit,
 		"current_branch": result.CurrentBranch,
 		"error":          result.Error,
+	})
+}
+
+// ==================== 版本升级增强 API ====================
+
+// ListProjectInstallations 查询项目下所有已安装目标
+// GET /release/projects/:id/installations
+func (api *ReleaseAPI) ListProjectInstallations(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	projectID := c.Param("id")
+	sourceVersion := c.Query("source_version") // 可选：按源版本过滤
+
+	var installations []models.TargetInstallation
+	query := api.db.Where("project_id = ?", projectID)
+	if sourceVersion != "" {
+		query = query.Where("version = ?", sourceVersion)
+	}
+
+	if err := query.Find(&installations).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// 关联查询目标和环境信息
+	var result []models.InstallationInfo
+	for _, inst := range installations {
+		var target models.Target
+		if err := api.db.First(&target, "id = ?", inst.TargetID).Error; err != nil {
+			continue
+		}
+
+		var env models.Environment
+		api.db.First(&env, "id = ?", target.EnvironmentID)
+
+		info := models.InstallationInfo{
+			ClientID:      target.ClientID,
+			TargetID:      inst.TargetID,
+			TargetName:    target.Name,
+			Environment:   env.Name,
+			EnvironmentID: env.ID,
+			Version:       inst.Version,
+			Status:        inst.Status,
+			InstalledAt:   inst.InstalledAt,
+		}
+		if inst.LastUpdatedAt != nil {
+			info.LastUpdatedAt = *inst.LastUpdatedAt
+		} else {
+			info.LastUpdatedAt = inst.InstalledAt
+		}
+
+		result = append(result, info)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":       true,
+		"installations": result,
+		"total":         len(result),
+	})
+}
+
+// ==================== 进程上报 API ====================
+
+// ReceiveProcessReport 接收进程上报
+// POST /release/process-report
+func (api *ReleaseAPI) ReceiveProcessReport(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	var req struct {
+		ClientID   string              `json:"client_id" binding:"required"`
+		ProjectID  string              `json:"project_id" binding:"required"`
+		ReleaseID  string              `json:"release_id"`
+		VersionID  string              `json:"version_id"`
+		Version    string              `json:"version"`
+		Processes  []models.ProcessInfo `json:"processes"`
+		ReportedAt time.Time           `json:"reported_at"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if req.ReportedAt.IsZero() {
+		req.ReportedAt = time.Now()
+	}
+
+	report := &models.ProcessReport{
+		ClientID:   req.ClientID,
+		ProjectID:  req.ProjectID,
+		VersionID:  req.VersionID,
+		Version:    req.Version,
+		ReleaseID:  req.ReleaseID,
+		Processes:  req.Processes,
+		ReportedAt: req.ReportedAt,
+	}
+
+	if err := api.db.Create(report).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"id":      report.ID,
+	})
+}
+
+// ListProjectProcesses 查询项目下所有客户端的进程状态
+// GET /release/projects/:id/processes
+func (api *ReleaseAPI) ListProjectProcesses(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	projectID := c.Param("id")
+
+	// 获取每个客户端的最新进程上报
+	var reports []models.ProcessReport
+	subQuery := api.db.Model(&models.ProcessReport{}).
+		Select("MAX(reported_at) as max_time, client_id").
+		Where("project_id = ?", projectID).
+		Group("client_id")
+
+	if err := api.db.Model(&models.ProcessReport{}).
+		Joins("JOIN (?) AS latest ON process_reports.client_id = latest.client_id AND process_reports.reported_at = latest.max_time", subQuery).
+		Where("project_id = ?", projectID).
+		Find(&reports).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	type ClientProcessInfo struct {
+		ClientID   string              `json:"client_id"`
+		Version    string              `json:"version"`
+		Processes  []models.ProcessInfo `json:"processes"`
+		LastReport time.Time           `json:"last_report"`
+		Status     string              `json:"status"`
+	}
+
+	var result []ClientProcessInfo
+	for _, report := range reports {
+		status := "healthy"
+		if len(report.Processes) == 0 {
+			status = "no_processes"
+		}
+
+		result = append(result, ClientProcessInfo{
+			ClientID:   report.ClientID,
+			Version:    report.Version,
+			Processes:  report.Processes,
+			LastReport: report.ReportedAt,
+			Status:     status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"clients": result,
+		"total":   len(result),
+	})
+}
+
+// ==================== 容器上报 API ====================
+
+// ReceiveContainerReport 接收容器上报
+// POST /release/container-report
+func (api *ReleaseAPI) ReceiveContainerReport(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	var req struct {
+		ClientID      string                `json:"client_id" binding:"required"`
+		ProjectID     string                `json:"project_id"`
+		Containers    []models.ContainerInfo `json:"containers"`
+		DockerVersion string                `json:"docker_version"`
+		TotalCount    int                   `json:"total_count"`
+		RunningCount  int                   `json:"running_count"`
+		ReportedAt    time.Time             `json:"reported_at"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if req.ReportedAt.IsZero() {
+		req.ReportedAt = time.Now()
+	}
+
+	report := &models.ContainerReport{
+		ClientID:      req.ClientID,
+		ProjectID:     req.ProjectID,
+		Containers:    req.Containers,
+		DockerVersion: req.DockerVersion,
+		TotalCount:    req.TotalCount,
+		RunningCount:  req.RunningCount,
+		ReportedAt:    req.ReportedAt,
+	}
+
+	if err := api.db.Create(report).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"id":      report.ID,
+	})
+}
+
+// ListProjectContainers 查询项目下所有客户端的容器状态
+// GET /release/projects/:id/containers
+func (api *ReleaseAPI) ListProjectContainers(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	projectID := c.Param("id")
+
+	// 获取项目的容器前缀
+	var project models.Project
+	if err := api.db.First(&project, "id = ?", projectID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "Project not found",
+		})
+		return
+	}
+
+	prefix := ""
+	if project.ContainerNaming != nil {
+		prefix = project.ContainerNaming.Prefix
+	}
+
+	// 获取每个客户端的最新容器上报
+	var reports []models.ContainerReport
+	subQuery := api.db.Model(&models.ContainerReport{}).
+		Select("MAX(reported_at) as max_time, client_id").
+		Group("client_id")
+
+	if err := api.db.Model(&models.ContainerReport{}).
+		Joins("JOIN (?) AS latest ON container_reports.client_id = latest.client_id AND container_reports.reported_at = latest.max_time", subQuery).
+		Find(&reports).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	type ClientContainerInfo struct {
+		ClientID   string                 `json:"client_id"`
+		Containers []models.ContainerInfo `json:"containers"`
+		LastReport time.Time              `json:"last_report"`
+	}
+
+	var result []ClientContainerInfo
+	totalContainers := 0
+	runningCount := 0
+
+	for _, report := range reports {
+		// 过滤匹配前缀的容器
+		var matchedContainers []models.ContainerInfo
+		for _, container := range report.Containers {
+			if prefix == "" || strings.HasPrefix(container.ContainerName, prefix) {
+				matchedContainers = append(matchedContainers, container)
+				totalContainers++
+				if container.State == "running" {
+					runningCount++
+				}
+			}
+		}
+
+		if len(matchedContainers) > 0 {
+			result = append(result, ClientContainerInfo{
+				ClientID:   report.ClientID,
+				Containers: matchedContainers,
+				LastReport: report.ReportedAt,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"project_id": projectID,
+		"prefix":     prefix,
+		"summary": gin.H{
+			"total_clients":    len(result),
+			"total_containers": totalContainers,
+			"running_count":    runningCount,
+			"stopped_count":    totalContainers - runningCount,
+		},
+		"clients": result,
+	})
+}
+
+// GetContainersOverview 全局容器概览
+// GET /release/containers/overview
+func (api *ReleaseAPI) GetContainersOverview(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	// 获取所有项目及其容器前缀
+	var projects []models.Project
+	if err := api.db.Find(&projects).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// 获取每个客户端的最新容器上报
+	var reports []models.ContainerReport
+	subQuery := api.db.Model(&models.ContainerReport{}).
+		Select("MAX(reported_at) as max_time, client_id").
+		Group("client_id")
+
+	api.db.Model(&models.ContainerReport{}).
+		Joins("JOIN (?) AS latest ON container_reports.client_id = latest.client_id AND container_reports.reported_at = latest.max_time", subQuery).
+		Find(&reports)
+
+	// 按项目统计
+	type ProjectStats struct {
+		ProjectID   string `json:"project_id"`
+		ProjectName string `json:"project_name"`
+		Prefix      string `json:"prefix"`
+		Count       int    `json:"count"`
+		Running     int    `json:"running"`
+	}
+
+	projectStats := make(map[string]*ProjectStats)
+	totalContainers := 0
+
+	for _, project := range projects {
+		prefix := ""
+		if project.ContainerNaming != nil {
+			prefix = project.ContainerNaming.Prefix
+		}
+		projectStats[project.ID] = &ProjectStats{
+			ProjectID:   project.ID,
+			ProjectName: project.Name,
+			Prefix:      prefix,
+		}
+	}
+
+	for _, report := range reports {
+		for _, container := range report.Containers {
+			totalContainers++
+			// 尝试匹配项目
+			for _, stats := range projectStats {
+				if stats.Prefix != "" && strings.HasPrefix(container.ContainerName, stats.Prefix) {
+					stats.Count++
+					if container.State == "running" {
+						stats.Running++
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 转换为列表
+	var byProject []ProjectStats
+	for _, stats := range projectStats {
+		if stats.Count > 0 {
+			byProject = append(byProject, *stats)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":          true,
+		"total_containers": totalContainers,
+		"by_project":       byProject,
 	})
 }

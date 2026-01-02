@@ -41,6 +41,15 @@ func RegisterBuiltinHandlers(r *router.Router, cfg *Config) {
 	// 磁盘测试处理器
 	r.Register(command.CmdDiskBenchmark, DiskBenchmark)
 	r.Register(command.CmdDiskIOPS, DiskIOPS)
+
+	// 进程采集处理器
+	r.Register(command.CmdProcessCollect, ProcessCollect)
+	r.Register(command.CmdProcessReport, ProcessReport)
+
+	// 容器采集处理器
+	r.Register(command.CmdContainerCollect, ContainerCollect)
+	r.Register(command.CmdContainerReport, ContainerReport)
+	r.Register(command.CmdContainerList, ContainerList)
 }
 
 // ============================================================================
@@ -60,4 +69,11 @@ const (
 	CmdHardwareInfo      = command.CmdHardwareInfo
 	CmdDiskBenchmark     = command.CmdDiskBenchmark
 	CmdDiskIOPS          = command.CmdDiskIOPS
+	// 进程采集
+	CmdProcessCollect = command.CmdProcessCollect
+	CmdProcessReport  = command.CmdProcessReport
+	// 容器采集
+	CmdContainerCollect = command.CmdContainerCollect
+	CmdContainerReport  = command.CmdContainerReport
+	CmdContainerList    = command.CmdContainerList
 )

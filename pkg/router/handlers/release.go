@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/voilet/quic-flow/pkg/command"
@@ -138,6 +139,13 @@ func ReleaseExecute(ctx context.Context, payload json.RawMessage) (json.RawMessa
 
 	// 创建命令
 	cmd := exec.CommandContext(execCtx, interpreter, tmpFile.Name())
+
+	// 进程脱离设置：使脚本启动的进程独立于Client运行
+	if params.DetachProcess {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true, // 创建新会话，脱离父进程控制
+		}
+	}
 
 	// 设置工作目录
 	// 确保目录存在

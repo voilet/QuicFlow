@@ -225,6 +225,9 @@ type Project struct {
 	// Git 拉取部署配置
 	GitPullConfig *GitPullDeployConfig `gorm:"type:jsonb" json:"gitpull_config,omitempty"`
 
+	// 容器命名配置（用于容器/K8s部署）
+	ContainerNaming *ContainerNamingConfig `gorm:"type:jsonb" json:"container_naming,omitempty"`
+
 	// 关联
 	Environments []Environment `gorm:"foreignKey:ProjectID" json:"environments,omitempty"`
 	Variables    []Variable    `gorm:"foreignKey:ProjectID" json:"variables,omitempty"`
@@ -748,6 +751,9 @@ type Version struct {
 	Replicas       int    `gorm:"default:1" json:"replicas"`       // K8s 副本数
 	K8sYAML        string `gorm:"type:text" json:"k8s_yaml"`       // K8s YAML 配置
 
+	// 进程监控配置（部署后自动采集进程信息）
+	ProcessConfig *ProcessMonitorConfig `gorm:"type:jsonb" json:"process_config,omitempty"`
+
 	// 状态
 	Status string `gorm:"size:20;default:'draft'" json:"status"` // draft, active, deprecated
 
@@ -783,6 +789,11 @@ type DeployTask struct {
 
 	// 目标
 	ClientIDs StringSlice `gorm:"type:jsonb" json:"client_ids"`
+
+	// 版本升级自动选择客户端配置
+	SourceVersion     string `gorm:"size:50" json:"source_version,omitempty"`     // 源版本过滤，用于升级场景
+	AutoSelectClients bool   `gorm:"default:false" json:"auto_select_clients"`    // 自动选择已安装客户端
+	SelectedFromVersion string `gorm:"size:50" json:"selected_from_version,omitempty"` // 记录来源版本
 
 	// 执行计划
 	ScheduleType string     `gorm:"size:20;default:'immediate'" json:"schedule_type"` // immediate, scheduled
@@ -991,6 +1002,202 @@ type DeployStats struct {
 	SuccessRate  float64 `json:"success_rate"`
 }
 
+// ==================== 版本升级增强模型 ====================
+
+// InstallationInfo 已安装目标信息（API 响应）
+type InstallationInfo struct {
+	ClientID      string    `json:"client_id"`
+	TargetID      string    `json:"target_id"`
+	TargetName    string    `json:"target_name"`
+	Environment   string    `json:"environment"`
+	EnvironmentID string    `json:"environment_id"`
+	Version       string    `json:"version"`
+	Status        string    `json:"status"`
+	InstalledAt   time.Time `json:"installed_at"`
+	LastUpdatedAt time.Time `json:"last_updated_at"`
+}
+
+// ContainerNamingConfig 容器命名配置
+type ContainerNamingConfig struct {
+	Prefix     string `json:"prefix"`               // 前缀，如 "myapp"
+	Separator  string `json:"separator,omitempty"`  // 分隔符，默认 "-"
+	IncludeEnv bool   `json:"include_env"`          // 包含环境名
+	IncludeVer bool   `json:"include_ver"`          // 包含版本号
+	MaxLength  int    `json:"max_length,omitempty"` // 最大长度，默认 63
+
+	// 容器名称模板，支持变量: ${PREFIX}, ${ENV}, ${VERSION}, ${TIMESTAMP}, ${INDEX}
+	Template string `json:"template,omitempty"`
+}
+
+func (c ContainerNamingConfig) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+func (c *ContainerNamingConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, c)
+}
+
+// ==================== 进程监控模型 ====================
+
+// ProcessMonitorConfig 进程监控配置
+type ProcessMonitorConfig struct {
+	Rules           []ProcessMatchRule `json:"rules"`                      // 进程匹配规则
+	CollectInterval int                `json:"collect_interval,omitempty"` // 采集间隔（秒），默认 60
+	CollectResources bool              `json:"collect_resources"`          // 采集资源占用
+	AlertOnExit     bool               `json:"alert_on_exit"`              // 进程退出告警
+	AlertOnHighCPU  int                `json:"alert_on_high_cpu,omitempty"` // CPU 使用率告警阈值（%）
+	AlertOnHighMem  int                `json:"alert_on_high_mem,omitempty"` // 内存使用率告警阈值（%）
+}
+
+func (p ProcessMonitorConfig) Value() (driver.Value, error) {
+	return json.Marshal(p)
+}
+
+func (p *ProcessMonitorConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, p)
+}
+
+// ProcessMatchRule 进程匹配规则
+type ProcessMatchRule struct {
+	Type    string `json:"type"`    // name, cmdline, pidfile, port
+	Pattern string `json:"pattern"` // 匹配模式
+	Name    string `json:"name"`    // 显示名称
+}
+
+// ProcessReport 进程上报记录
+type ProcessReport struct {
+	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ClientID  string    `gorm:"size:100;index;not null" json:"client_id"`
+	ProjectID string    `gorm:"type:uuid;index;not null" json:"project_id"`
+	VersionID string    `gorm:"type:uuid;index" json:"version_id,omitempty"`
+	Version   string    `gorm:"size:50" json:"version,omitempty"`
+	ReleaseID string    `gorm:"type:uuid;index" json:"release_id,omitempty"`
+
+	// 进程信息
+	Processes ProcessInfoList `gorm:"type:jsonb" json:"processes"`
+
+	ReportedAt time.Time `gorm:"index;not null" json:"reported_at"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (ProcessReport) TableName() string {
+	return "process_reports"
+}
+
+// ProcessInfoList 进程信息列表
+type ProcessInfoList []ProcessInfo
+
+func (p ProcessInfoList) Value() (driver.Value, error) {
+	return json.Marshal(p)
+}
+
+func (p *ProcessInfoList) Scan(value interface{}) error {
+	if value == nil {
+		*p = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, p)
+}
+
+// ProcessInfo 进程信息
+type ProcessInfo struct {
+	PID        int       `json:"pid"`
+	Name       string    `json:"name"`
+	Cmdline    string    `json:"cmdline"`
+	StartTime  time.Time `json:"start_time"`
+	Status     string    `json:"status"`      // running, sleeping, zombie
+	CPUPercent float64   `json:"cpu_percent"`
+	MemoryMB   float64   `json:"memory_mb"`
+	MemoryPct  float64   `json:"memory_pct"`
+	MatchedBy  string    `json:"matched_by"`  // 匹配规则名称
+}
+
+// ==================== 容器上报模型 ====================
+
+// ContainerReport 容器上报记录
+type ContainerReport struct {
+	ID        string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ClientID  string `gorm:"size:100;index;not null" json:"client_id"`
+	ProjectID string `gorm:"type:uuid;index" json:"project_id,omitempty"`
+
+	// 容器信息
+	Containers ContainerInfoList `gorm:"type:jsonb" json:"containers"`
+
+	// 采集信息
+	DockerVersion string `gorm:"size:50" json:"docker_version,omitempty"`
+	TotalCount    int    `gorm:"default:0" json:"total_count"`
+	RunningCount  int    `gorm:"default:0" json:"running_count"`
+
+	ReportedAt time.Time `gorm:"index;not null" json:"reported_at"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (ContainerReport) TableName() string {
+	return "container_reports"
+}
+
+// ContainerInfoList 容器信息列表
+type ContainerInfoList []ContainerInfo
+
+func (c ContainerInfoList) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+func (c *ContainerInfoList) Scan(value interface{}) error {
+	if value == nil {
+		*c = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, c)
+}
+
+// ContainerInfo 容器信息
+type ContainerInfo struct {
+	ContainerID   string    `json:"container_id"`
+	ContainerName string    `json:"container_name"`
+	Image         string    `json:"image"`
+	Status        string    `json:"status"`     // running, exited, paused
+	State         string    `json:"state"`      // created, running, paused, restarting, removing, exited, dead
+	CreatedAt     time.Time `json:"created_at"`
+	StartedAt     time.Time `json:"started_at"`
+
+	// 资源占用
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryUsage   int64   `json:"memory_usage"`   // bytes
+	MemoryLimit   int64   `json:"memory_limit"`   // bytes
+	MemoryPercent float64 `json:"memory_percent"`
+
+	// 网络
+	NetworkRx int64 `json:"network_rx"` // bytes
+	NetworkTx int64 `json:"network_tx"` // bytes
+
+	// 项目归属（按前缀匹配）
+	MatchedProject string `json:"matched_project,omitempty"`
+	MatchedPrefix  string `json:"matched_prefix,omitempty"`
+}
+
 // ==================== 数据库迁移 ====================
 
 // AllModels 所有模型列表
@@ -1008,4 +1215,6 @@ var AllModels = []interface{}{
 	&StatusReport{},
 	&Approval{},
 	&ServiceDependency{},
+	&ProcessReport{},
+	&ContainerReport{},
 }
