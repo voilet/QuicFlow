@@ -533,13 +533,14 @@
         <template v-if="selectedProject?.type === 'gitpull'">
           <el-divider content-position="left">Git 版本选择</el-divider>
 
-          <el-form-item label="选择客户端">
-            <el-select v-model="gitVersionForm.client_id" placeholder="选择一个客户端来查询 Git 仓库" @change="onGitClientChange" style="width: 300px">
-              <el-option v-for="c in clients" :key="c.client_id" :label="c.client_id" :value="c.client_id" />
-            </el-select>
-            <el-button type="primary" :loading="loadingGitVersions" @click="fetchGitVersions" :disabled="!gitVersionForm.client_id" class="ml-2">
-              获取版本
+          <el-form-item label="获取版本">
+            <el-button type="primary" :loading="loadingGitVersions" @click="fetchGitVersions">
+              <el-icon><Refresh /></el-icon>
+              从仓库获取版本
             </el-button>
+            <span class="form-tip ml-2" v-if="gitVersions.tags?.length > 0">
+              已获取 {{ gitVersions.tags.length }} 个 Tag, {{ gitVersions.branches?.length || 0 }} 个分支
+            </span>
           </el-form-item>
 
           <el-form-item label="版本类型">
@@ -1014,7 +1015,6 @@ const scriptTab = ref('install')
 // Git 版本相关状态
 const loadingGitVersions = ref(false)
 const gitVersionForm = reactive({
-  client_id: '',
   version_type: 'tag',
   selected_tag: '',
   selected_branch: '',
@@ -1406,7 +1406,6 @@ function showCreateVersion() {
   versionForm.git_ref = ''
   versionForm.git_ref_type = ''
   // 重置 Git 版本表单
-  gitVersionForm.client_id = ''
   gitVersionForm.version_type = 'tag'
   gitVersionForm.selected_tag = ''
   gitVersionForm.selected_branch = ''
@@ -1422,17 +1421,15 @@ function showCreateVersion() {
   versionDialogVisible.value = true
 }
 
-// 获取 Git 仓库版本信息
+// 获取 Git 仓库版本信息（Server 端直接执行，不需要选择 Client）
 async function fetchGitVersions() {
-  if (!gitVersionForm.client_id || !selectedProject.value) return
+  if (!selectedProject.value) return
 
   loadingGitVersions.value = true
   try {
     const res = await api.getGitVersions({
-      client_id: gitVersionForm.client_id,
       project_id: selectedProject.value.id,
       repo_url: selectedProject.value.gitpull_config?.repo_url || '',
-      work_dir: selectedProject.value.gitpull_config?.work_dir || '',
       auth_type: selectedProject.value.gitpull_config?.auth_type || 'none',
       token: selectedProject.value.gitpull_config?.token || '',
       username: selectedProject.value.gitpull_config?.username || '',
@@ -1458,16 +1455,6 @@ async function fetchGitVersions() {
   } finally {
     loadingGitVersions.value = false
   }
-}
-
-// Git 客户端变更时清空已选版本
-function onGitClientChange() {
-  gitVersionForm.selected_tag = ''
-  gitVersionForm.selected_branch = ''
-  gitVersionForm.selected_commit = ''
-  gitVersions.tags = []
-  gitVersions.branches = []
-  gitVersions.recent_commits = []
 }
 
 async function saveVersion() {
