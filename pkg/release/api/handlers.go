@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voilet/quic-flow/pkg/git"
 	"github.com/voilet/quic-flow/pkg/release/engine"
 	"github.com/voilet/quic-flow/pkg/release/executor"
 	"github.com/voilet/quic-flow/pkg/release/models"
@@ -2048,20 +2049,19 @@ func validateAllScripts(installScript, updateScript, rollbackScript, uninstallSc
 }
 
 // GetGitVersions 获取 Git 仓库版本信息
+// 直接在 Server 端执行 git 命令，不需要选择 Client
 func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
 	var req struct {
-		ClientID   string `json:"client_id" binding:"required"`
-		ProjectID  string `json:"project_id"`
-		RepoURL    string `json:"repo_url"`
-		WorkDir    string `json:"work_dir"`
-		AuthType   string `json:"auth_type"`
-		SSHKey     string `json:"ssh_key"`
-		Token      string `json:"token"`
-		Username   string `json:"username"`
-		Password   string `json:"password"`
-		MaxTags    int    `json:"max_tags"`
-		MaxCommits int    `json:"max_commits"`
-		IncludeBranches bool `json:"include_branches"`
+		ProjectID       string `json:"project_id"`
+		RepoURL         string `json:"repo_url"`
+		AuthType        string `json:"auth_type"`
+		SSHKey          string `json:"ssh_key"`
+		Token           string `json:"token"`
+		Username        string `json:"username"`
+		Password        string `json:"password"`
+		MaxTags         int    `json:"max_tags"`
+		MaxCommits      int    `json:"max_commits"`
+		IncludeBranches bool   `json:"include_branches"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -2073,41 +2073,50 @@ func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
 	}
 
 	// 构建配置
-	var config *models.GitPullDeployConfig
+	var repoURL, authType, sshKey, token, username, password string
 
 	// 如果提供了 project_id，从项目获取配置
 	if req.ProjectID != "" && api.db != nil {
 		var project models.Project
 		if err := api.db.First(&project, "id = ?", req.ProjectID).Error; err == nil {
-			config = project.GitPullConfig
+			if project.GitPullConfig != nil {
+				repoURL = project.GitPullConfig.RepoURL
+				authType = project.GitPullConfig.AuthType
+				sshKey = project.GitPullConfig.SSHKey
+				token = project.GitPullConfig.Token
+				username = project.GitPullConfig.Username
+				password = project.GitPullConfig.Password
+			}
 		}
 	}
 
-	// 如果没有从项目获取到配置，使用请求参数构建
-	if config == nil {
-		config = &models.GitPullDeployConfig{
-			RepoURL:  req.RepoURL,
-			WorkDir:  req.WorkDir,
-			AuthType: req.AuthType,
-			SSHKey:   req.SSHKey,
-			Token:    req.Token,
-			Username: req.Username,
-			Password: req.Password,
-		}
+	// 请求参数覆盖项目配置
+	if req.RepoURL != "" {
+		repoURL = req.RepoURL
+	}
+	if req.AuthType != "" {
+		authType = req.AuthType
+	}
+	if req.SSHKey != "" {
+		sshKey = req.SSHKey
+	}
+	if req.Token != "" {
+		token = req.Token
+	}
+	if req.Username != "" {
+		username = req.Username
+	}
+	if req.Password != "" {
+		password = req.Password
 	}
 
 	// 验证必须有仓库地址
-	if config.RepoURL == "" && req.RepoURL == "" {
+	if repoURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "repo_url is required",
 		})
 		return
-	}
-
-	// 如果请求中有仓库地址，优先使用
-	if req.RepoURL != "" {
-		config.RepoURL = req.RepoURL
 	}
 
 	// 设置默认值
@@ -2120,15 +2129,15 @@ func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
 		maxCommits = 10
 	}
 
-	// 调用引擎获取版本信息
-	result, err := api.engine.FetchGitVersions(
-		c.Request.Context(),
-		req.ClientID,
-		config,
-		maxTags,
-		maxCommits,
-		req.IncludeBranches,
-	)
+	// 创建 Git 客户端并直接在 Server 端执行
+	gitClient := git.NewClientWithAuth(authType, sshKey, token, username, password)
+
+	result, err := gitClient.FetchVersions(c.Request.Context(), &git.FetchVersionsRequest{
+		RepoURL:         repoURL,
+		MaxTags:         maxTags,
+		MaxCommits:      maxCommits,
+		IncludeBranches: req.IncludeBranches,
+	})
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -2145,8 +2154,6 @@ func (api *ReleaseAPI) GetGitVersions(c *gin.Context) {
 		"tags":           result.Tags,
 		"branches":       result.Branches,
 		"recent_commits": result.RecentCommits,
-		"current_commit": result.CurrentCommit,
-		"current_branch": result.CurrentBranch,
 		"error":          result.Error,
 	})
 }
