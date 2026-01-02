@@ -670,8 +670,83 @@ func (e *Engine) executeK8sDeploy(
 	varCtx *variable.Context,
 	result *models.TargetResult,
 ) error {
-	// TODO: 实现 K8s 部署
-	return fmt.Errorf("k8s deploy not implemented")
+	if project.KubernetesConfig == nil {
+		return fmt.Errorf("kubernetes config is nil")
+	}
+
+	config := project.KubernetesConfig
+
+	// 如果没有远程执行器，无法执行 K8s 部署
+	if e.remoteExec == nil {
+		return fmt.Errorf("remote executor not configured, cannot execute k8s deploy")
+	}
+
+	// 获取目标信息
+	var target models.Target
+	if err := e.db.WithContext(ctx).First(&target, "id = ?", result.TargetID).Error; err != nil {
+		return fmt.Errorf("target not found: %w", err)
+	}
+
+	if target.ClientID == "" {
+		return fmt.Errorf("target has no client_id")
+	}
+
+	// 解析镜像地址
+	image := config.Image
+	if image != "" {
+		var err error
+		image, err = e.varManager.Resolve(ctx, image, varCtx)
+		if err != nil {
+			return fmt.Errorf("resolve image: %w", err)
+		}
+	}
+
+	// 解析 YAML
+	yaml := config.YAML
+	if yaml == "" && config.YAMLTemplate != "" {
+		yaml = config.YAMLTemplate
+	}
+	if yaml != "" {
+		var err error
+		yaml, err = e.varManager.Resolve(ctx, yaml, varCtx)
+		if err != nil {
+			return fmt.Errorf("resolve yaml: %w", err)
+		}
+	}
+
+	// 解析环境变量
+	env := make(map[string]string)
+	for k, v := range config.Environment {
+		resolved, err := e.varManager.Resolve(ctx, v, varCtx)
+		if err != nil {
+			return fmt.Errorf("resolve env %s: %w", k, err)
+		}
+		env[k] = resolved
+	}
+
+	// 执行 K8s 部署
+	execResult, err := e.remoteExec.ExecuteK8sDeploy(ctx, &executor.K8sDeployRequest{
+		ReleaseID:   release.ID,
+		TargetID:    result.TargetID,
+		ClientID:    target.ClientID,
+		Operation:   release.Operation,
+		Version:     release.Version,
+		Config:      config,
+		Image:       image,
+		YAML:        yaml,
+		Environment: env,
+		VarContext:  varCtx,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if !execResult.Success {
+		return fmt.Errorf("k8s deploy failed: %s", execResult.Error)
+	}
+
+	return nil
 }
 
 // executeGitPullDeploy 执行 Git 拉取部署
@@ -918,7 +993,7 @@ func (e *Engine) ExecuteRemote(clientID, script, workDir string) (string, error)
 	}
 
 	if !result.Success {
-		return result.Output, fmt.Errorf(result.Error)
+		return result.Output, fmt.Errorf("%s", result.Error)
 	}
 
 	return result.Output, nil
@@ -953,7 +1028,7 @@ func (e *Engine) FetchGitVersions(ctx context.Context, clientID string, config *
 	}
 
 	if !result.Success {
-		return result, fmt.Errorf(result.Error)
+		return result, fmt.Errorf("%s", result.Error)
 	}
 
 	return result, nil

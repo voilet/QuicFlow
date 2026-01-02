@@ -134,6 +134,39 @@ type GitVersionsRequest struct {
 	IncludeBranches bool                 // 是否包含分支列表
 }
 
+// K8sDeployRequest Kubernetes 部署请求
+type K8sDeployRequest struct {
+	ReleaseID   string
+	TargetID    string
+	ClientID    string
+	Operation   models.OperationType
+	Version     string
+	Config      *models.KubernetesDeployConfig
+	Image       string            // 解析后的镜像地址
+	YAML        string            // 解析后的 YAML
+	Environment map[string]string // 解析后的环境变量
+	ToRevision  int               // 回滚到指定版本
+	VarContext  *variable.Context
+}
+
+// K8sDeployResult Kubernetes 部署结果
+type K8sDeployResult struct {
+	Success       bool
+	Namespace     string
+	ResourceType  string
+	ResourceName  string
+	Image         string
+	Replicas      int
+	ReadyReplicas int
+	Revision      int
+	RolloutStatus string
+	Output        string
+	Error         string
+	Duration      time.Duration
+	StartedAt     time.Time
+	FinishedAt    time.Time
+}
+
 // GitVersionsResult Git 版本查询结果
 type GitVersionsResult struct {
 	Success       bool
@@ -869,6 +902,135 @@ func (e *RemoteExecutor) FetchGitVersions(ctx context.Context, req *GitVersionsR
 		result.CurrentCommit = versionsResult.CurrentCommit
 		result.CurrentBranch = versionsResult.CurrentBranch
 		result.Error = versionsResult.Error
+	} else {
+		result.Success = false
+		result.Error = finalCmd.Error
+		if result.Error == "" {
+			result.Error = fmt.Sprintf("command status: %s", finalCmd.Status)
+		}
+	}
+
+	return result, nil
+}
+
+// ExecuteK8sDeploy 执行 Kubernetes 部署
+func (e *RemoteExecutor) ExecuteK8sDeploy(ctx context.Context, req *K8sDeployRequest) (*K8sDeployResult, error) {
+	result := &K8sDeployResult{
+		StartedAt: time.Now(),
+	}
+
+	// 构建命令参数
+	params := command.K8sDeployParams{
+		ReleaseID: req.ReleaseID,
+		TargetID:  req.TargetID,
+		Operation: e.toReleaseOpType(req.Operation),
+		Version:   req.Version,
+		Image:     req.Image,
+		YAML:      req.YAML,
+	}
+
+	// 从配置中复制其他参数
+	if req.Config != nil {
+		params.Namespace = req.Config.Namespace
+		params.ResourceType = req.Config.ResourceType
+		params.ResourceName = req.Config.ResourceName
+		params.ContainerName = req.Config.ContainerName
+		params.YAMLTemplate = req.Config.YAMLTemplate
+		params.Registry = req.Config.Registry
+		params.RegistryUser = req.Config.RegistryUser
+		params.RegistryPass = req.Config.RegistryPass
+		params.ImagePullPolicy = req.Config.ImagePullPolicy
+		params.ImagePullSecret = req.Config.ImagePullSecret
+		params.Replicas = req.Config.Replicas
+		params.UpdateStrategy = req.Config.UpdateStrategy
+		params.MaxUnavailable = req.Config.MaxUnavailable
+		params.MaxSurge = req.Config.MaxSurge
+		params.MinReadySeconds = req.Config.MinReadySeconds
+		params.CPURequest = req.Config.CPURequest
+		params.CPULimit = req.Config.CPULimit
+		params.MemoryRequest = req.Config.MemoryRequest
+		params.MemoryLimit = req.Config.MemoryLimit
+		params.KubeConfig = req.Config.KubeConfig
+		params.KubeContext = req.Config.KubeContext
+		params.Timeout = req.Config.DeployTimeout
+		params.RolloutTimeout = req.Config.RolloutTimeout
+
+		// 环境变量（优先使用解析后的）
+		if len(req.Environment) > 0 {
+			params.Environment = req.Environment
+		} else if len(req.Config.Environment) > 0 {
+			params.Environment = req.Config.Environment
+		}
+	}
+
+	// 回滚版本
+	params.ToRevision = req.ToRevision
+
+	// 序列化参数
+	payload, err := json.Marshal(params)
+	if err != nil {
+		result.Error = fmt.Sprintf("marshal params: %v", err)
+		result.FinishedAt = time.Now()
+		result.Duration = result.FinishedAt.Sub(result.StartedAt)
+		return result, err
+	}
+
+	// 计算超时时间
+	timeout := 600 // 默认10分钟
+	if req.Config != nil {
+		if req.Config.DeployTimeout > 0 {
+			timeout = req.Config.DeployTimeout
+		}
+		if req.Config.RolloutTimeout > 0 && req.Config.RolloutTimeout > timeout {
+			timeout = req.Config.RolloutTimeout
+		}
+	}
+
+	// 发送命令
+	cmd, err := e.cmdSender.SendCommand(
+		req.ClientID,
+		command.CmdK8sDeploy,
+		payload,
+		time.Duration(timeout+30)*time.Second,
+	)
+	if err != nil {
+		result.Error = fmt.Sprintf("send command: %v", err)
+		result.FinishedAt = time.Now()
+		result.Duration = result.FinishedAt.Sub(result.StartedAt)
+		return result, err
+	}
+
+	// 等待命令完成
+	finalCmd, err := e.waitForCompletion(ctx, cmd, time.Duration(timeout+60)*time.Second)
+	if err != nil {
+		result.Error = fmt.Sprintf("wait completion: %v", err)
+		result.FinishedAt = time.Now()
+		result.Duration = result.FinishedAt.Sub(result.StartedAt)
+		return result, err
+	}
+
+	// 解析结果
+	result.FinishedAt = time.Now()
+	result.Duration = result.FinishedAt.Sub(result.StartedAt)
+
+	if finalCmd.Status == command.CommandStatusCompleted {
+		var deployResult command.K8sDeployResult
+		if err := json.Unmarshal(finalCmd.Result, &deployResult); err != nil {
+			result.Error = fmt.Sprintf("unmarshal result: %v", err)
+			return result, err
+		}
+
+		result.Success = deployResult.Success
+		result.Namespace = deployResult.Namespace
+		result.ResourceType = deployResult.ResourceType
+		result.ResourceName = deployResult.ResourceName
+		result.Image = deployResult.Image
+		result.Replicas = deployResult.Replicas
+		result.ReadyReplicas = deployResult.ReadyReplicas
+		result.Revision = deployResult.Revision
+		result.RolloutStatus = deployResult.RolloutStatus
+		result.Output = deployResult.Output
+		result.Error = deployResult.Error
 	} else {
 		result.Success = false
 		result.Error = finalCmd.Error

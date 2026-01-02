@@ -494,22 +494,104 @@
               <el-option label="除非停止" value="unless-stopped" />
             </el-select>
           </el-form-item>
+          <el-form-item label="高级配置">
+            <el-button type="primary" @click="dockerConfigDialogVisible = true">
+              <el-icon><Setting /></el-icon>
+              配置端口、存储、网络、资源限制等
+            </el-button>
+            <div class="form-tip" v-if="hasAdvancedDockerConfig">
+              已配置:
+              <el-tag v-if="projectForm.container_config.ports?.length" size="small" class="config-tag">{{ projectForm.container_config.ports.length }} 个端口</el-tag>
+              <el-tag v-if="projectForm.container_config.volumes?.length" size="small" class="config-tag">{{ projectForm.container_config.volumes.length }} 个卷</el-tag>
+              <el-tag v-if="projectForm.container_config.memory_limit" size="small" class="config-tag">内存限制</el-tag>
+              <el-tag v-if="projectForm.container_config.cpu_limit" size="small" class="config-tag">CPU限制</el-tag>
+              <el-tag v-if="projectForm.container_config.privileged" size="small" type="warning" class="config-tag">特权模式</el-tag>
+            </div>
+          </el-form-item>
         </template>
 
         <!-- Kubernetes 配置 -->
         <template v-if="projectForm.type === 'kubernetes'">
-          <el-divider content-position="left">Kubernetes 配置</el-divider>
+          <el-divider content-position="left">Kubernetes 基础配置</el-divider>
           <el-form-item label="命名空间">
             <el-input v-model="projectForm.k8s_config.namespace" placeholder="default" />
           </el-form-item>
-          <el-form-item label="部署名称">
-            <el-input v-model="projectForm.k8s_config.deployment_name" placeholder="my-app" />
+          <el-form-item label="资源类型">
+            <el-select v-model="projectForm.k8s_config.resource_type" placeholder="选择资源类型">
+              <el-option label="Deployment" value="deployment" />
+              <el-option label="StatefulSet" value="statefulset" />
+              <el-option label="DaemonSet" value="daemonset" />
+            </el-select>
           </el-form-item>
-          <el-form-item label="镜像地址">
+          <el-form-item label="资源名称">
+            <el-input v-model="projectForm.k8s_config.resource_name" placeholder="my-app" />
+          </el-form-item>
+          <el-form-item label="容器名称">
+            <el-input v-model="projectForm.k8s_config.container_name" placeholder="留空则使用资源名称" />
+          </el-form-item>
+
+          <el-divider content-position="left">镜像配置</el-divider>
+          <el-form-item label="默认镜像">
             <el-input v-model="projectForm.k8s_config.image" placeholder="nginx:latest" />
           </el-form-item>
-          <el-form-item label="副本数">
+          <el-form-item label="镜像仓库">
+            <el-input v-model="projectForm.k8s_config.registry" placeholder="registry.example.com（可选）" />
+          </el-form-item>
+          <el-form-item label="仓库用户" v-if="projectForm.k8s_config.registry">
+            <el-input v-model="projectForm.k8s_config.registry_user" placeholder="用户名" />
+          </el-form-item>
+          <el-form-item label="仓库密码" v-if="projectForm.k8s_config.registry">
+            <el-input v-model="projectForm.k8s_config.registry_pass" type="password" show-password placeholder="密码" />
+          </el-form-item>
+          <el-form-item label="镜像拉取策略">
+            <el-select v-model="projectForm.k8s_config.image_pull_policy">
+              <el-option label="IfNotPresent（推荐）" value="IfNotPresent" />
+              <el-option label="Always" value="Always" />
+              <el-option label="Never" value="Never" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="ImagePullSecret" v-if="projectForm.k8s_config.registry">
+            <el-input v-model="projectForm.k8s_config.image_pull_secret" placeholder="自动创建或使用已有 Secret 名称" />
+          </el-form-item>
+
+          <el-divider content-position="left">副本与更新策略</el-divider>
+          <el-form-item label="默认副本数">
             <el-input-number v-model="projectForm.k8s_config.replicas" :min="1" :max="100" />
+          </el-form-item>
+          <el-form-item label="更新策略">
+            <el-select v-model="projectForm.k8s_config.update_strategy">
+              <el-option label="RollingUpdate（滚动更新）" value="RollingUpdate" />
+              <el-option label="Recreate（重建）" value="Recreate" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="最大不可用" v-if="projectForm.k8s_config.update_strategy === 'RollingUpdate'">
+            <el-input v-model="projectForm.k8s_config.max_unavailable" placeholder="25% 或 1" style="width: 150px" />
+          </el-form-item>
+          <el-form-item label="最大超出" v-if="projectForm.k8s_config.update_strategy === 'RollingUpdate'">
+            <el-input v-model="projectForm.k8s_config.max_surge" placeholder="25% 或 1" style="width: 150px" />
+          </el-form-item>
+          <el-form-item label="部署超时">
+            <el-input-number v-model="projectForm.k8s_config.rollout_timeout" :min="60" :max="3600" />
+            <span class="form-tip ml-2">秒</span>
+          </el-form-item>
+
+          <el-divider content-position="left">Service 配置（可选）</el-divider>
+          <el-form-item label="Service 类型">
+            <el-select v-model="projectForm.k8s_config.service_type" placeholder="不创建 Service">
+              <el-option label="不创建 Service" value="" />
+              <el-option label="ClusterIP" value="ClusterIP" />
+              <el-option label="NodePort" value="NodePort" />
+              <el-option label="LoadBalancer" value="LoadBalancer" />
+            </el-select>
+          </el-form-item>
+
+          <el-divider content-position="left">Kubeconfig（可选）</el-divider>
+          <el-form-item label="Kubeconfig">
+            <el-input v-model="projectForm.k8s_config.kubeconfig" placeholder="留空使用默认配置" />
+            <div class="form-tip">指定 kubeconfig 文件路径，留空使用客户端默认配置</div>
+          </el-form-item>
+          <el-form-item label="Context" v-if="projectForm.k8s_config.kubeconfig">
+            <el-input v-model="projectForm.k8s_config.kube_context" placeholder="留空使用当前 context" />
           </el-form-item>
         </template>
       </el-form>
@@ -575,13 +657,21 @@
             <span class="ml-2 text-gray">{{ gitVersions.current_commit?.substring(0, 7) }}</span>
           </el-form-item>
 
-          <el-divider content-position="left">部署后脚本（可选）</el-divider>
-          <el-form-item label="部署脚本">
+          <el-divider content-position="left">部署脚本（可选）</el-divider>
+          <el-form-item label="部署前脚本">
             <CodeEditor
-              v-model="versionForm.install_script"
+              v-model="versionForm.pre_script"
               language="shell"
-              height="200px"
-              placeholder="#!/bin/bash&#10;# Git 拉取后执行的脚本（可选）"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# Git 拉取前执行的脚本（可选）&#10;# 例如：停止服务、备份数据等"
+            />
+          </el-form-item>
+          <el-form-item label="部署后脚本">
+            <CodeEditor
+              v-model="versionForm.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# Git 拉取后执行的脚本（可选）&#10;# 例如：编译、重启服务、清理缓存等"
             />
           </el-form-item>
         </template>
@@ -613,20 +703,59 @@
         <template v-else-if="selectedProject?.type === 'kubernetes'">
           <el-divider content-position="left">Kubernetes 部署配置</el-divider>
 
-          <el-form-item label="镜像地址">
-            <el-input v-model="versionForm.container_image" placeholder="nginx:1.25.0" />
+          <el-form-item label="镜像版本" prop="container_image">
+            <el-input v-model="versionForm.container_image" placeholder="nginx:1.25.0（留空使用项目默认镜像）" />
+            <div class="form-tip" v-if="selectedProject?.k8s_config?.image">
+              项目默认镜像: {{ selectedProject.k8s_config.image }}
+            </div>
           </el-form-item>
 
           <el-form-item label="副本数">
             <el-input-number v-model="versionForm.replicas" :min="1" :max="100" />
+            <span class="form-tip ml-2">留空使用项目默认值</span>
           </el-form-item>
 
-          <el-form-item label="YAML 配置">
+          <el-divider content-position="left">资源限制（可选）</el-divider>
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="CPU Request">
+                <el-input v-model="versionForm.cpu_request" placeholder="100m" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="CPU Limit">
+                <el-input v-model="versionForm.cpu_limit" placeholder="500m" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="Memory Request">
+                <el-input v-model="versionForm.memory_request" placeholder="128Mi" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="Memory Limit">
+                <el-input v-model="versionForm.memory_limit" placeholder="512Mi" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-divider content-position="left">环境变量（可选）</el-divider>
+          <el-form-item label="环境变量">
+            <el-input v-model="versionForm.container_env" type="textarea" rows="3" placeholder="KEY1=value1&#10;KEY2=value2" />
+          </el-form-item>
+
+          <el-divider content-position="left">YAML 配置（可选）</el-divider>
+          <el-form-item>
+            <div class="form-tip mb-8">
+              可选择覆盖默认配置，或提供完整的 Kubernetes YAML 资源定义
+            </div>
             <CodeEditor
               v-model="versionForm.k8s_yaml"
               language="yaml"
               height="250px"
-              placeholder="# Kubernetes Deployment YAML（可选覆盖）"
+              placeholder="# Kubernetes Deployment YAML（可选覆盖）&#10;# 留空则使用项目配置自动生成"
             />
           </el-form-item>
         </template>
@@ -682,28 +811,168 @@
     </el-dialog>
 
     <!-- 创建部署任务对话框 -->
-    <el-dialog v-model="taskDialogVisible" title="创建部署任务" width="700px">
+    <el-dialog v-model="taskDialogVisible" title="创建部署任务" width="750px">
       <el-form :model="taskForm" :rules="taskRules" ref="taskFormRef" label-width="120px">
         <el-form-item label="部署版本">
           <el-tag>{{ selectedVersion?.version }}</el-tag>
+          <el-tag type="info" class="ml-2">{{ getProjectTypeLabel(selectedProject?.type) }}</el-tag>
         </el-form-item>
 
         <el-form-item label="操作类型" prop="operation">
-          <el-radio-group v-model="taskForm.operation">
-            <el-radio value="install">
-              <el-icon><Download /></el-icon> 安装
-            </el-radio>
-            <el-radio value="update">
-              <el-icon><Upload /></el-icon> 升级
-            </el-radio>
-            <el-radio value="rollback">
-              <el-icon><RefreshLeft /></el-icon> 回滚
-            </el-radio>
-            <el-radio value="uninstall">
-              <el-icon><Delete /></el-icon> 卸载
-            </el-radio>
-          </el-radio-group>
+          <!-- Docker 容器操作 -->
+          <template v-if="selectedProject?.type === 'container'">
+            <el-radio-group v-model="taskForm.operation">
+              <el-radio value="deploy">
+                <el-icon><Promotion /></el-icon> 部署
+                <span class="op-desc">（自动判断新建/更新）</span>
+              </el-radio>
+              <el-radio value="install">
+                <el-icon><Download /></el-icon> 新建容器
+              </el-radio>
+              <el-radio value="update">
+                <el-icon><Upload /></el-icon> 更新镜像
+              </el-radio>
+              <el-radio value="rollback">
+                <el-icon><RefreshLeft /></el-icon> 回滚
+              </el-radio>
+              <el-radio value="uninstall">
+                <el-icon><Delete /></el-icon> 删除容器
+              </el-radio>
+            </el-radio-group>
+          </template>
+
+          <!-- Kubernetes 操作 -->
+          <template v-else-if="selectedProject?.type === 'kubernetes'">
+            <el-radio-group v-model="taskForm.operation">
+              <el-radio value="deploy">
+                <el-icon><Promotion /></el-icon> 部署
+                <span class="op-desc">（自动判断新建/更新）</span>
+              </el-radio>
+              <el-radio value="install">
+                <el-icon><Download /></el-icon> 创建资源
+              </el-radio>
+              <el-radio value="update">
+                <el-icon><Upload /></el-icon> 滚动更新
+              </el-radio>
+              <el-radio value="rollback">
+                <el-icon><RefreshLeft /></el-icon> 回滚版本
+              </el-radio>
+              <el-radio value="uninstall">
+                <el-icon><Delete /></el-icon> 删除资源
+              </el-radio>
+            </el-radio-group>
+          </template>
+
+          <!-- Git Pull 操作 -->
+          <template v-else-if="selectedProject?.type === 'gitpull'">
+            <el-radio-group v-model="taskForm.operation">
+              <el-radio value="deploy">
+                <el-icon><Promotion /></el-icon> 部署
+                <span class="op-desc">（自动判断克隆/拉取）</span>
+              </el-radio>
+              <el-radio value="install">
+                <el-icon><Download /></el-icon> 克隆仓库
+              </el-radio>
+              <el-radio value="update">
+                <el-icon><Upload /></el-icon> 拉取更新
+              </el-radio>
+              <el-radio value="rollback">
+                <el-icon><RefreshLeft /></el-icon> 回滚
+              </el-radio>
+            </el-radio-group>
+          </template>
+
+          <!-- 脚本操作（默认） -->
+          <template v-else>
+            <el-radio-group v-model="taskForm.operation">
+              <el-radio value="install">
+                <el-icon><Download /></el-icon> 安装
+              </el-radio>
+              <el-radio value="update">
+                <el-icon><Upload /></el-icon> 升级
+              </el-radio>
+              <el-radio value="rollback">
+                <el-icon><RefreshLeft /></el-icon> 回滚
+              </el-radio>
+              <el-radio value="uninstall">
+                <el-icon><Delete /></el-icon> 卸载
+              </el-radio>
+            </el-radio-group>
+          </template>
         </el-form-item>
+
+        <!-- Docker 容器特定配置 -->
+        <template v-if="selectedProject?.type === 'container'">
+          <el-divider content-position="left">容器配置</el-divider>
+
+          <el-form-item label="镜像版本" v-if="taskForm.operation !== 'uninstall'">
+            <el-input v-model="taskForm.container_image" :placeholder="selectedVersion?.container_image || selectedProject?.container_config?.image || 'nginx:latest'" />
+            <div class="form-tip">留空则使用版本默认镜像</div>
+          </el-form-item>
+
+          <el-form-item label="覆盖环境变量" v-if="taskForm.operation !== 'uninstall'">
+            <el-input v-model="taskForm.container_env" type="textarea" rows="2" placeholder="KEY=value（每行一个，覆盖默认配置）" />
+          </el-form-item>
+
+          <el-form-item label="拉取策略" v-if="taskForm.operation !== 'uninstall'">
+            <el-select v-model="taskForm.image_pull_policy">
+              <el-option label="始终拉取 (Always)" value="always" />
+              <el-option label="不存在时拉取 (IfNotPresent)" value="ifnotpresent" />
+              <el-option label="从不拉取 (Never)" value="never" />
+            </el-select>
+          </el-form-item>
+        </template>
+
+        <!-- Kubernetes 特定配置 -->
+        <template v-if="selectedProject?.type === 'kubernetes'">
+          <el-divider content-position="left">Kubernetes 配置</el-divider>
+
+          <el-form-item label="镜像版本" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
+            <el-input v-model="taskForm.k8s_image" :placeholder="selectedVersion?.container_image || selectedProject?.k8s_config?.image || 'nginx:latest'" />
+            <div class="form-tip">留空则使用版本默认镜像</div>
+          </el-form-item>
+
+          <el-form-item label="副本数" v-if="taskForm.operation === 'install' || taskForm.operation === 'deploy'">
+            <el-input-number v-model="taskForm.k8s_replicas" :min="1" :max="100" />
+            <span class="form-tip ml-2">留空使用默认值</span>
+          </el-form-item>
+
+          <el-form-item label="回滚到版本" v-if="taskForm.operation === 'rollback'">
+            <el-input-number v-model="taskForm.k8s_revision" :min="0" placeholder="0 表示上一个版本" />
+            <div class="form-tip">输入 0 或留空表示回滚到上一个版本</div>
+          </el-form-item>
+
+          <el-form-item label="等待超时" v-if="taskForm.operation !== 'uninstall'">
+            <el-input-number v-model="taskForm.k8s_timeout" :min="60" :max="3600" />
+            <span class="form-tip ml-2">秒（等待 Pod 就绪）</span>
+          </el-form-item>
+        </template>
+
+        <!-- Git Pull 特定配置 -->
+        <template v-if="selectedProject?.type === 'gitpull'">
+          <el-divider content-position="left">Git 配置</el-divider>
+
+          <el-form-item label="目标版本" v-if="taskForm.operation !== 'rollback'">
+            <el-input v-model="taskForm.git_ref" :placeholder="selectedVersion?.git_ref || 'main'" />
+            <div class="form-tip">Tag、分支名或 Commit SHA（留空使用版本默认值）</div>
+          </el-form-item>
+
+          <el-form-item label="回滚到" v-if="taskForm.operation === 'rollback'">
+            <el-input v-model="taskForm.git_rollback_ref" placeholder="输入要回滚到的 Tag、分支或 Commit" />
+          </el-form-item>
+
+          <el-form-item label="部署后脚本">
+            <el-switch v-model="taskForm.run_post_script" />
+            <span class="form-tip ml-2">执行项目配置的部署后脚本</span>
+          </el-form-item>
+
+          <el-form-item label="强制覆盖">
+            <el-switch v-model="taskForm.git_force" />
+            <span class="form-tip ml-2">丢弃本地修改，强制同步远程版本</span>
+          </el-form-item>
+        </template>
+
+        <el-divider content-position="left">目标选择</el-divider>
 
         <el-form-item label="目标客户端" prop="client_ids">
           <el-select
@@ -803,6 +1072,11 @@
       <template v-if="selectedTask">
         <el-descriptions :column="3" border>
           <el-descriptions-item label="版本">{{ selectedTask.version }}</el-descriptions-item>
+          <el-descriptions-item label="部署类型">
+            <el-tag :type="getProjectTypeTag(selectedTask.deploy_type || selectedProject?.type)">
+              {{ getProjectTypeLabel(selectedTask.deploy_type || selectedProject?.type) }}
+            </el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="操作">
             <el-tag :type="getOperationTag(selectedTask.operation)">
               {{ getOperationLabel(selectedTask.operation) }}
@@ -822,6 +1096,59 @@
           <el-descriptions-item label="创建时间">{{ formatTime(selectedTask.created_at) }}</el-descriptions-item>
         </el-descriptions>
 
+        <!-- Docker 容器任务详情 -->
+        <template v-if="(selectedTask.deploy_type || selectedProject?.type) === 'container'">
+          <el-descriptions :column="2" border class="mt-16" title="容器配置">
+            <el-descriptions-item label="镜像">
+              <el-tag type="info">{{ selectedTask.container_image || selectedTask.image || '默认' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="容器名">{{ selectedTask.container_name || '默认' }}</el-descriptions-item>
+            <el-descriptions-item label="拉取策略">{{ selectedTask.image_pull_policy || 'ifnotpresent' }}</el-descriptions-item>
+            <el-descriptions-item label="镜像已拉取">
+              <el-tag v-if="selectedTask.image_pulled" size="small" type="success">是</el-tag>
+              <el-tag v-else size="small" type="info">否</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </template>
+
+        <!-- Kubernetes 任务详情 -->
+        <template v-if="(selectedTask.deploy_type || selectedProject?.type) === 'kubernetes'">
+          <el-descriptions :column="2" border class="mt-16" title="Kubernetes 配置">
+            <el-descriptions-item label="命名空间">{{ selectedTask.namespace || 'default' }}</el-descriptions-item>
+            <el-descriptions-item label="资源名">{{ selectedTask.resource_name || '默认' }}</el-descriptions-item>
+            <el-descriptions-item label="镜像">
+              <el-tag type="info">{{ selectedTask.k8s_image || selectedTask.image || '默认' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="副本数">
+              {{ selectedTask.replicas || '默认' }} / {{ selectedTask.ready_replicas || 0 }} 就绪
+            </el-descriptions-item>
+            <el-descriptions-item label="版本号">{{ selectedTask.revision || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="滚动状态">
+              <el-tag :type="selectedTask.rollout_status === 'complete' ? 'success' : 'warning'" size="small">
+                {{ selectedTask.rollout_status || '未知' }}
+              </el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </template>
+
+        <!-- Git Pull 任务详情 -->
+        <template v-if="(selectedTask.deploy_type || selectedProject?.type) === 'gitpull'">
+          <el-descriptions :column="2" border class="mt-16" title="Git 配置">
+            <el-descriptions-item label="Git Ref">
+              <el-tag type="info">{{ selectedTask.git_ref || selectedTask.branch || '默认' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="当前 Commit">{{ selectedTask.commit?.substring(0, 8) || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="执行部署脚本">
+              <el-tag v-if="selectedTask.run_post_script" size="small" type="success">是</el-tag>
+              <el-tag v-else size="small" type="info">否</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="备份">
+              <el-tag v-if="selectedTask.backed_up" size="small" type="success">已备份</el-tag>
+              <el-tag v-else size="small" type="info">未备份</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </template>
+
         <div class="task-progress" v-if="selectedTask.status === 'running' || selectedTask.status === 'canary'">
           <h4>执行进度</h4>
           <el-progress
@@ -838,25 +1165,42 @@
 
         <h4 style="margin: 20px 0 10px">目标执行结果</h4>
         <el-table :data="selectedTask.results || []" size="small" border max-height="400">
-          <el-table-column prop="client_id" label="客户端" width="200" />
-          <el-table-column prop="status" label="状态" width="100">
+          <el-table-column prop="client_id" label="客户端" width="180" />
+          <el-table-column prop="status" label="状态" width="90">
             <template #default="{ row }">
               <el-tag size="small" :type="getResultStatusTag(row.status)">
                 {{ getResultStatusLabel(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="is_canary" label="金丝雀" width="80">
+          <el-table-column prop="is_canary" label="金丝雀" width="70">
             <template #default="{ row }">
               <el-tag v-if="row.is_canary" size="small" type="warning">是</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="started_at" label="开始时间" width="160">
+          <!-- Docker/K8s 特有列 -->
+          <el-table-column v-if="(selectedTask.deploy_type || selectedProject?.type) === 'container'" prop="container_id" label="容器ID" width="100">
+            <template #default="{ row }">
+              {{ row.container_id?.substring(0, 12) || '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column v-if="(selectedTask.deploy_type || selectedProject?.type) === 'kubernetes'" prop="ready_replicas" label="就绪" width="60">
+            <template #default="{ row }">
+              {{ row.ready_replicas || 0 }}/{{ row.replicas || 0 }}
+            </template>
+          </el-table-column>
+          <!-- Git 特有列 -->
+          <el-table-column v-if="(selectedTask.deploy_type || selectedProject?.type) === 'gitpull'" prop="commit" label="Commit" width="80">
+            <template #default="{ row }">
+              {{ row.commit?.substring(0, 7) || '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="started_at" label="开始时间" width="150">
             <template #default="{ row }">
               {{ formatTime(row.started_at) }}
             </template>
           </el-table-column>
-          <el-table-column prop="duration" label="耗时" width="80">
+          <el-table-column prop="duration" label="耗时" width="70">
             <template #default="{ row }">
               {{ formatDuration(row.duration) }}
             </template>
@@ -880,47 +1224,154 @@
               {{ getVersionStatusLabel(selectedVersionDetail.status) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="工作目录">{{ selectedVersionDetail.work_dir || '/opt/app' }}</el-descriptions-item>
+          <el-descriptions-item label="部署类型">
+            <el-tag :type="getProjectTypeTag(selectedProject?.type)">
+              {{ getProjectTypeLabel(selectedProject?.type) }}
+            </el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatTime(selectedVersionDetail.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="版本说明" :span="2">
             {{ selectedVersionDetail.description || '无' }}
           </el-descriptions-item>
         </el-descriptions>
 
-        <el-tabs class="script-tabs">
-          <el-tab-pane label="安装脚本">
+        <!-- Docker 容器版本详情 -->
+        <template v-if="selectedProject?.type === 'container'">
+          <el-descriptions :column="2" border class="mt-16" title="容器配置">
+            <el-descriptions-item label="镜像">
+              <el-tag type="info">{{ selectedVersionDetail.container_image || selectedProject?.container_config?.image || '未配置' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="容器名">{{ selectedProject?.container_config?.container_name || '默认' }}</el-descriptions-item>
+            <el-descriptions-item label="重启策略">{{ selectedProject?.container_config?.restart_policy || 'unless-stopped' }}</el-descriptions-item>
+            <el-descriptions-item label="网络模式">{{ selectedProject?.container_config?.network_mode || 'bridge' }}</el-descriptions-item>
+          </el-descriptions>
+          <div v-if="selectedVersionDetail.container_env" class="version-config-section">
+            <h4>环境变量</h4>
+            <CodeEditor
+              :model-value="selectedVersionDetail.container_env || '# 未配置'"
+              language="shell"
+              height="100px"
+              :read-only="true"
+            />
+          </div>
+        </template>
+
+        <!-- Kubernetes 版本详情 -->
+        <template v-else-if="selectedProject?.type === 'kubernetes'">
+          <el-descriptions :column="2" border class="mt-16" title="Kubernetes 配置">
+            <el-descriptions-item label="镜像">
+              <el-tag type="info">{{ selectedVersionDetail.container_image || selectedProject?.k8s_config?.image || '未配置' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="命名空间">{{ selectedProject?.k8s_config?.namespace || 'default' }}</el-descriptions-item>
+            <el-descriptions-item label="资源名">{{ selectedProject?.k8s_config?.resource_name || selectedProject?.name }}</el-descriptions-item>
+            <el-descriptions-item label="副本数">{{ selectedVersionDetail.replicas || selectedProject?.k8s_config?.replicas || 1 }}</el-descriptions-item>
+          </el-descriptions>
+          <el-descriptions :column="4" border class="mt-16" title="资源限制" v-if="selectedVersionDetail.cpu_request || selectedVersionDetail.cpu_limit || selectedVersionDetail.memory_request || selectedVersionDetail.memory_limit">
+            <el-descriptions-item label="CPU Request">{{ selectedVersionDetail.cpu_request || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="CPU Limit">{{ selectedVersionDetail.cpu_limit || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="Memory Request">{{ selectedVersionDetail.memory_request || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="Memory Limit">{{ selectedVersionDetail.memory_limit || '-' }}</el-descriptions-item>
+          </el-descriptions>
+          <div v-if="selectedVersionDetail.container_env" class="version-config-section">
+            <h4>环境变量</h4>
+            <CodeEditor
+              :model-value="selectedVersionDetail.container_env || '# 未配置'"
+              language="shell"
+              height="100px"
+              :read-only="true"
+            />
+          </div>
+          <div v-if="selectedVersionDetail.k8s_yaml" class="version-config-section">
+            <h4>YAML 配置</h4>
+            <CodeEditor
+              :model-value="selectedVersionDetail.k8s_yaml || '# 未配置'"
+              language="yaml"
+              height="250px"
+              :read-only="true"
+            />
+          </div>
+        </template>
+
+        <!-- Git Pull 版本详情 -->
+        <template v-else-if="selectedProject?.type === 'gitpull'">
+          <el-descriptions :column="2" border class="mt-16" title="Git 配置">
+            <el-descriptions-item label="仓库地址">{{ selectedProject?.gitpull_config?.repo_url || '未配置' }}</el-descriptions-item>
+            <el-descriptions-item label="目标 Ref">
+              <el-tag type="info">{{ selectedVersionDetail.git_ref || selectedProject?.gitpull_config?.branch || 'main' }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="Ref 类型">{{ selectedVersionDetail.git_ref_type || 'branch' }}</el-descriptions-item>
+            <el-descriptions-item label="工作目录">{{ selectedProject?.gitpull_config?.work_dir || '/opt/app' }}</el-descriptions-item>
+          </el-descriptions>
+          <div v-if="selectedVersionDetail.pre_script" class="version-config-section">
+            <h4>部署前脚本</h4>
+            <CodeEditor
+              :model-value="selectedVersionDetail.pre_script || '# 未配置'"
+              language="shell"
+              height="150px"
+              :read-only="true"
+            />
+          </div>
+          <div v-if="selectedVersionDetail.post_script" class="version-config-section">
+            <h4>部署后脚本</h4>
+            <CodeEditor
+              :model-value="selectedVersionDetail.post_script || '# 未配置'"
+              language="shell"
+              height="150px"
+              :read-only="true"
+            />
+          </div>
+          <div v-if="!selectedVersionDetail.pre_script && !selectedVersionDetail.post_script && selectedVersionDetail.install_script" class="version-config-section">
+            <h4>部署脚本</h4>
             <CodeEditor
               :model-value="selectedVersionDetail.install_script || '# 未配置'"
               language="shell"
-              height="300px"
+              height="200px"
               :read-only="true"
             />
-          </el-tab-pane>
-          <el-tab-pane label="升级脚本">
-            <CodeEditor
-              :model-value="selectedVersionDetail.update_script || '# 未配置'"
-              language="shell"
-              height="300px"
-              :read-only="true"
-            />
-          </el-tab-pane>
-          <el-tab-pane label="回滚脚本">
-            <CodeEditor
-              :model-value="selectedVersionDetail.rollback_script || '# 未配置'"
-              language="shell"
-              height="300px"
-              :read-only="true"
-            />
-          </el-tab-pane>
-          <el-tab-pane label="卸载脚本">
-            <CodeEditor
-              :model-value="selectedVersionDetail.uninstall_script || '# 未配置'"
-              language="shell"
-              height="300px"
-              :read-only="true"
-            />
-          </el-tab-pane>
-        </el-tabs>
+          </div>
+        </template>
+
+        <!-- 脚本版本详情 -->
+        <template v-else>
+          <el-descriptions :column="2" border class="mt-16">
+            <el-descriptions-item label="工作目录">{{ selectedVersionDetail.work_dir || '/opt/app' }}</el-descriptions-item>
+            <el-descriptions-item label="部署次数">{{ selectedVersionDetail.deploy_count || 0 }}</el-descriptions-item>
+          </el-descriptions>
+          <el-tabs class="script-tabs">
+            <el-tab-pane label="安装脚本">
+              <CodeEditor
+                :model-value="selectedVersionDetail.install_script || '# 未配置'"
+                language="shell"
+                height="250px"
+                :read-only="true"
+              />
+            </el-tab-pane>
+            <el-tab-pane label="升级脚本">
+              <CodeEditor
+                :model-value="selectedVersionDetail.update_script || '# 未配置'"
+                language="shell"
+                height="250px"
+                :read-only="true"
+              />
+            </el-tab-pane>
+            <el-tab-pane label="回滚脚本">
+              <CodeEditor
+                :model-value="selectedVersionDetail.rollback_script || '# 未配置'"
+                language="shell"
+                height="250px"
+                :read-only="true"
+              />
+            </el-tab-pane>
+            <el-tab-pane label="卸载脚本">
+              <CodeEditor
+                :model-value="selectedVersionDetail.uninstall_script || '# 未配置'"
+                language="shell"
+                height="250px"
+                :read-only="true"
+              />
+            </el-tab-pane>
+          </el-tabs>
+        </template>
       </template>
     </el-drawer>
 
@@ -973,6 +1424,13 @@
         </div>
       </template>
     </el-drawer>
+
+    <!-- Docker 配置对话框 -->
+    <DockerConfigDialog
+      v-model="dockerConfigDialogVisible"
+      :initial-config="projectForm.container_config"
+      @save="handleDockerConfigSave"
+    />
   </div>
 </template>
 
@@ -980,10 +1438,11 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete
+  Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
+import { DockerConfigDialog } from '@/components/docker'
 
 // ==================== 状态 ====================
 const loading = ref(false)
@@ -1036,6 +1495,7 @@ const taskDialogVisible = ref(false)
 const taskDetailVisible = ref(false)
 const versionDetailVisible = ref(false)
 const logDetailVisible = ref(false)
+const dockerConfigDialogVisible = ref(false)
 const editingProject = ref(null)
 
 // ==================== 表单 ====================
@@ -1069,9 +1529,23 @@ const projectForm = reactive({
   // Kubernetes 配置
   k8s_config: {
     namespace: 'default',
-    deployment_name: '',
+    resource_type: 'deployment',
+    resource_name: '',
+    container_name: '',
     image: '',
-    replicas: 1
+    registry: '',
+    registry_user: '',
+    registry_pass: '',
+    image_pull_policy: 'IfNotPresent',
+    image_pull_secret: '',
+    replicas: 1,
+    update_strategy: 'RollingUpdate',
+    max_unavailable: '25%',
+    max_surge: '25%',
+    rollout_timeout: 300,
+    service_type: '',
+    kubeconfig: '',
+    kube_context: ''
   }
 })
 
@@ -1093,9 +1567,16 @@ const versionForm = reactive({
   container_env: '',
   replicas: 1,
   k8s_yaml: '',
+  // K8s 资源限制
+  cpu_request: '',
+  cpu_limit: '',
+  memory_request: '',
+  memory_limit: '',
   // Git 相关
   git_ref: '',       // tag/branch/commit 值
-  git_ref_type: ''   // tag/branch/commit 类型
+  git_ref_type: '',  // tag/branch/commit 类型
+  pre_script: '',    // 部署前脚本（Git 类型用）
+  post_script: ''    // 部署后脚本（Git 类型用）
 })
 
 const versionRules = {
@@ -1104,7 +1585,7 @@ const versionRules = {
 }
 
 const taskForm = reactive({
-  operation: 'install',
+  operation: 'deploy',
   client_ids: [],
   schedule_type: 'immediate',
   schedule_time: null,
@@ -1113,7 +1594,21 @@ const taskForm = reactive({
   canary_duration: 30,
   canary_auto_promote: false,
   failure_strategy: 'continue',
-  auto_rollback: true
+  auto_rollback: true,
+  // Docker 容器配置
+  container_image: '',
+  container_env: '',
+  image_pull_policy: 'ifnotpresent',
+  // Kubernetes 配置
+  k8s_image: '',
+  k8s_replicas: null,
+  k8s_revision: 0,
+  k8s_timeout: 300,
+  // Git 配置
+  git_ref: '',
+  git_rollback_ref: '',
+  run_post_script: true,
+  git_force: false
 })
 
 const taskRules = {
@@ -1170,6 +1665,18 @@ const availableClients = computed(() => {
   // install: 未安装的客户端
   // update/rollback/uninstall: 已安装的客户端
   return clients.value
+})
+
+// 判断是否有高级 Docker 配置
+const hasAdvancedDockerConfig = computed(() => {
+  const cfg = projectForm.container_config
+  return cfg.ports?.length > 0 ||
+         cfg.volumes?.length > 0 ||
+         cfg.memory_limit ||
+         cfg.cpu_limit ||
+         cfg.privileged ||
+         cfg.networks?.length > 0 ||
+         cfg.devices?.length > 0
 })
 
 // ==================== 数据加载 ====================
@@ -1321,9 +1828,23 @@ function showCreateProject() {
   // 重置 K8s 配置
   projectForm.k8s_config = {
     namespace: 'default',
-    deployment_name: '',
+    resource_type: 'deployment',
+    resource_name: '',
+    container_name: '',
     image: '',
-    replicas: 1
+    registry: '',
+    registry_user: '',
+    registry_pass: '',
+    image_pull_policy: 'IfNotPresent',
+    image_pull_secret: '',
+    replicas: 1,
+    update_strategy: 'RollingUpdate',
+    max_unavailable: '25%',
+    max_surge: '25%',
+    rollout_timeout: 300,
+    service_type: '',
+    kubeconfig: '',
+    kube_context: ''
   }
   projectDialogVisible.value = true
 }
@@ -1388,6 +1909,13 @@ async function handleProjectAction(action, project) {
   }
 }
 
+// 处理 Docker 配置保存
+function handleDockerConfigSave(dockerConfig) {
+  // 合并 Docker 配置到 container_config
+  Object.assign(projectForm.container_config, dockerConfig)
+  ElMessage.success('Docker 配置已更新')
+}
+
 // ==================== 版本管理 ====================
 function showCreateVersion() {
   versionForm.version = ''
@@ -1402,9 +1930,16 @@ function showCreateVersion() {
   versionForm.container_env = ''
   versionForm.replicas = 1
   versionForm.k8s_yaml = ''
+  // K8s 资源限制
+  versionForm.cpu_request = ''
+  versionForm.cpu_limit = ''
+  versionForm.memory_request = ''
+  versionForm.memory_limit = ''
   // Git 字段
   versionForm.git_ref = ''
   versionForm.git_ref_type = ''
+  versionForm.pre_script = ''
+  versionForm.post_script = ''
   // 重置 Git 版本表单
   gitVersionForm.version_type = 'tag'
   gitVersionForm.selected_tag = ''
@@ -1517,7 +2052,13 @@ async function deleteVersion(version) {
 // ==================== 部署任务 ====================
 function showCreateTask(version) {
   selectedVersion.value = version
-  taskForm.operation = 'install'
+  // 根据项目类型设置默认操作
+  const projectType = selectedProject.value?.type
+  if (projectType === 'container' || projectType === 'kubernetes' || projectType === 'gitpull') {
+    taskForm.operation = 'deploy'
+  } else {
+    taskForm.operation = 'install'
+  }
   taskForm.client_ids = []
   taskForm.schedule_type = 'immediate'
   taskForm.schedule_time = null
@@ -1527,6 +2068,21 @@ function showCreateTask(version) {
   taskForm.canary_auto_promote = false
   taskForm.failure_strategy = 'continue'
   taskForm.auto_rollback = true
+  // 重置 Docker 配置
+  taskForm.container_image = ''
+  taskForm.container_env = ''
+  taskForm.image_pull_policy = 'ifnotpresent'
+  // 重置 K8s 配置
+  taskForm.k8s_image = ''
+  taskForm.k8s_replicas = null
+  taskForm.k8s_revision = 0
+  taskForm.k8s_timeout = 300
+  // 重置 Git 配置
+  taskForm.git_ref = ''
+  taskForm.git_rollback_ref = ''
+  taskForm.run_post_script = true
+  taskForm.git_force = false
+
   taskDialogVisible.value = true
 }
 
@@ -1651,12 +2207,12 @@ function viewLog(log) {
 
 // ==================== 工具函数 ====================
 function getProjectTypeTag(type) {
-  const map = { script: '', container: 'success', gitpull: 'info' }
+  const map = { script: '', container: 'success', gitpull: 'info', kubernetes: 'warning' }
   return map[type] || ''
 }
 
 function getProjectTypeLabel(type) {
-  const map = { script: '脚本', container: '容器', gitpull: 'Git' }
+  const map = { script: '脚本', container: '容器', gitpull: 'Git', kubernetes: 'K8s' }
   return map[type] || type
 }
 
@@ -1671,12 +2227,12 @@ function getVersionStatusLabel(status) {
 }
 
 function getOperationTag(op) {
-  const map = { install: 'success', update: 'primary', rollback: 'warning', uninstall: 'danger' }
+  const map = { deploy: 'primary', install: 'success', update: 'primary', rollback: 'warning', uninstall: 'danger' }
   return map[op] || ''
 }
 
 function getOperationLabel(op) {
-  const map = { install: '安装', update: '升级', rollback: '回滚', uninstall: '卸载' }
+  const map = { deploy: '部署', install: '安装', update: '升级', rollback: '回滚', uninstall: '卸载' }
   return map[op] || op
 }
 
@@ -2004,6 +2560,10 @@ onMounted(() => {
 
 .mt-20 {
   margin-top: 20px;
+}
+
+.mb-8 {
+  margin-bottom: 8px;
 }
 
 .info-card {
@@ -2442,5 +3002,41 @@ onMounted(() => {
 .release-page :deep(.el-button--primary:hover) {
   background-color: var(--tech-primary-light);
   border-color: var(--tech-primary-light);
+}
+
+/* Docker 配置标签样式 */
+.config-tag {
+  margin-left: 4px;
+  margin-bottom: 4px;
+}
+
+.form-tip .config-tag:first-child {
+  margin-left: 8px;
+}
+
+/* 操作类型描述 */
+.op-desc {
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  margin-left: 4px;
+}
+
+.el-radio-group .el-radio {
+  margin-bottom: 8px;
+}
+
+.mt-16 {
+  margin-top: 16px;
+}
+
+.version-config-section {
+  margin-top: 16px;
+}
+
+.version-config-section h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-text-primary);
 }
 </style>

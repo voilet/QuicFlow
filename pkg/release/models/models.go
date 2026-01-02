@@ -222,6 +222,9 @@ type Project struct {
 	// 容器部署配置
 	ContainerConfig *ContainerDeployConfig `gorm:"type:jsonb" json:"container_config,omitempty"`
 
+	// Kubernetes 部署配置
+	KubernetesConfig *KubernetesDeployConfig `gorm:"type:jsonb" json:"kubernetes_config,omitempty"`
+
 	// Git 拉取部署配置
 	GitPullConfig *GitPullDeployConfig `gorm:"type:jsonb" json:"gitpull_config,omitempty"`
 
@@ -603,38 +606,108 @@ type ScriptTimeouts struct {
 	Uninstall int `json:"uninstall"`
 }
 
-// ContainerDeployConfig 容器部署配置
+// ContainerDeployConfig 容器部署配置（完整版）
 type ContainerDeployConfig struct {
-	// 镜像配置
-	Image         string `json:"image"`                    // 镜像地址 (registry/image:tag)
-	Registry      string `json:"registry,omitempty"`       // 镜像仓库地址
-	RegistryUser  string `json:"registry_user,omitempty"`  // 仓库用户名
-	RegistryPass  string `json:"registry_pass,omitempty"`  // 仓库密码 (加密存储)
-	ImagePullPolicy string `json:"image_pull_policy,omitempty"` // always, ifnotpresent, never
+	// ==================== 镜像配置 ====================
+	Image           string `json:"image"`                         // 镜像地址 (registry/image:tag)
+	Registry        string `json:"registry,omitempty"`            // 镜像仓库地址
+	RegistryUser    string `json:"registry_user,omitempty"`       // 仓库用户名
+	RegistryPass    string `json:"registry_pass,omitempty"`       // 仓库密码 (加密存储)
+	ImagePullPolicy string `json:"image_pull_policy,omitempty"`   // always, ifnotpresent, never
+	Platform        string `json:"platform,omitempty"`            // 目标平台 (linux/amd64, linux/arm64)
 
-	// 容器配置
-	ContainerName string            `json:"container_name"`           // 容器名称
-	Ports         []PortMapping     `json:"ports,omitempty"`          // 端口映射
-	Volumes       []VolumeMount     `json:"volumes,omitempty"`        // 卷挂载
-	Environment   map[string]string `json:"environment,omitempty"`    // 环境变量
-	Networks      []string          `json:"networks,omitempty"`       // 网络
-	RestartPolicy string            `json:"restart_policy,omitempty"` // no, always, on-failure, unless-stopped
-	Command       []string          `json:"command,omitempty"`        // 启动命令
-	Entrypoint    []string          `json:"entrypoint,omitempty"`     // 入口点
+	// ==================== 容器基础配置 ====================
+	ContainerName string            `json:"container_name"`            // 容器名称
+	Hostname      string            `json:"hostname,omitempty"`        // 主机名
+	Domainname    string            `json:"domainname,omitempty"`      // 域名
+	User          string            `json:"user,omitempty"`            // 运行用户 (UID:GID 或 username)
+	GroupAdd      []string          `json:"group_add,omitempty"`       // 附加用户组
+	WorkingDir    string            `json:"working_dir,omitempty"`     // 工作目录
+	Environment   map[string]string `json:"environment,omitempty"`     // 环境变量
+	Labels        map[string]string `json:"labels,omitempty"`          // 容器标签
+	Command       []string          `json:"command,omitempty"`         // 启动命令
+	Entrypoint    []string          `json:"entrypoint,omitempty"`      // 入口点
 
-	// 资源限制
-	MemoryLimit   string `json:"memory_limit,omitempty"`   // 如 512m, 1g
-	CPULimit      string `json:"cpu_limit,omitempty"`      // 如 0.5, 1
-	MemoryReserve string `json:"memory_reserve,omitempty"` // 内存预留
+	// ==================== 端口配置 ====================
+	Ports       []PortMapping `json:"ports,omitempty"`        // 端口映射
+	ExposePorts []int         `json:"expose_ports,omitempty"` // 暴露端口但不映射
 
-	// 健康检查
+	// ==================== 网络配置 ====================
+	NetworkMode string   `json:"network_mode,omitempty"` // bridge/host/none/container:name
+	Networks    []string `json:"networks,omitempty"`     // 加入的网络
+	DNS         []string `json:"dns,omitempty"`          // DNS 服务器
+	DNSSearch   []string `json:"dns_search,omitempty"`   // DNS 搜索域
+	DNSOpt      []string `json:"dns_opt,omitempty"`      // DNS 选项
+	ExtraHosts  []string `json:"extra_hosts,omitempty"`  // 额外主机 (host:ip)
+	MacAddress  string   `json:"mac_address,omitempty"`  // MAC 地址
+	IPv4Address string   `json:"ipv4_address,omitempty"` // IPv4 地址
+	IPv6Address string   `json:"ipv6_address,omitempty"` // IPv6 地址
+	Links       []string `json:"links,omitempty"`        // 连接容器 (container:alias)
+
+	// ==================== 存储配置 ====================
+	Volumes      []VolumeMount         `json:"volumes,omitempty"`       // 卷挂载
+	TmpfsMounts  []TmpfsMount          `json:"tmpfs_mounts,omitempty"`  // tmpfs 挂载
+	VolumeDriver string                `json:"volume_driver,omitempty"` // 卷驱动
+	StorageOpts  map[string]string     `json:"storage_opts,omitempty"`  // 存储驱动选项
+
+	// ==================== 安全配置 ====================
+	Privileged      bool     `json:"privileged,omitempty"`         // 特权模式
+	CapAdd          []string `json:"cap_add,omitempty"`            // 添加的 capabilities
+	CapDrop         []string `json:"cap_drop,omitempty"`           // 移除的 capabilities
+	SecurityOpt     []string `json:"security_opt,omitempty"`       // 安全选项 (apparmor, seccomp)
+	ReadOnlyRootfs  bool     `json:"read_only_rootfs,omitempty"`   // 只读根文件系统
+	NoNewPrivileges bool     `json:"no_new_privileges,omitempty"`  // 禁止获取新权限
+	UsernsMode      string   `json:"userns_mode,omitempty"`        // 用户命名空间模式
+
+	// ==================== 设备配置 ====================
+	Devices           []DeviceMapping `json:"devices,omitempty"`             // 设备映射
+	GPUs              string          `json:"gpus,omitempty"`                // GPU 配置 (all 或具体 GPU ID)
+	DeviceCgroupRules []string        `json:"device_cgroup_rules,omitempty"` // 设备 cgroup 规则
+
+	// ==================== 资源限制 ====================
+	MemoryLimit      string   `json:"memory_limit,omitempty"`       // 内存限制 (512m, 1g)
+	MemoryReserve    string   `json:"memory_reserve,omitempty"`     // 内存预留
+	MemorySwap       string   `json:"memory_swap,omitempty"`        // 内存+交换限制 (-1 无限制)
+	MemorySwappiness *int     `json:"memory_swappiness,omitempty"`  // 交换倾向 (0-100)
+	CPULimit         string   `json:"cpu_limit,omitempty"`          // CPU 限制 (0.5, 1)
+	CPUShares        int      `json:"cpu_shares,omitempty"`         // CPU 权重 (默认 1024)
+	CpusetCpus       string   `json:"cpuset_cpus,omitempty"`        // CPU 绑定 (0,1 或 0-3)
+	CpusetMems       string   `json:"cpuset_mems,omitempty"`        // 内存节点绑定
+	PidsLimit        int64    `json:"pids_limit,omitempty"`         // 进程数限制
+	Ulimits          []Ulimit `json:"ulimits,omitempty"`            // ulimit 设置
+	OomKillDisable   bool     `json:"oom_kill_disable,omitempty"`   // 禁用 OOM Killer
+	OomScoreAdj      int      `json:"oom_score_adj,omitempty"`      // OOM 分数调整 (-1000 到 1000)
+	ShmSize          string   `json:"shm_size,omitempty"`           // /dev/shm 大小
+
+	// ==================== 运行时配置 ====================
+	Runtime      string            `json:"runtime,omitempty"`       // 运行时 (runc/nvidia)
+	Init         bool              `json:"init,omitempty"`          // 使用 tini 作为 init
+	PidMode      string            `json:"pid_mode,omitempty"`      // PID 命名空间 (host/container:name)
+	IpcMode      string            `json:"ipc_mode,omitempty"`      // IPC 命名空间
+	UtsMode      string            `json:"uts_mode,omitempty"`      // UTS 命名空间
+	CgroupParent string            `json:"cgroup_parent,omitempty"` // 父 cgroup
+	Sysctls      map[string]string `json:"sysctls,omitempty"`       // 内核参数
+	StopSignal   string            `json:"stop_signal,omitempty"`   // 停止信号 (默认 SIGTERM)
+	Tty          bool              `json:"tty,omitempty"`           // 分配 TTY
+	StdinOpen    bool              `json:"stdin_open,omitempty"`    // 保持 stdin 开启
+
+	// ==================== 日志配置 ====================
+	LogDriver string            `json:"log_driver,omitempty"` // 日志驱动 (json-file/syslog/journald/none)
+	LogOpts   map[string]string `json:"log_opts,omitempty"`   // 日志选项 (max-size, max-file)
+
+	// ==================== 健康检查 ====================
 	HealthCheck *ContainerHealthCheck `json:"health_check,omitempty"`
 
-	// 部署策略
-	StopTimeout    int  `json:"stop_timeout"`     // 停止超时（秒）
-	RemoveOld      bool `json:"remove_old"`       // 移除旧容器
-	KeepOldCount   int  `json:"keep_old_count"`   // 保留旧容器数量
-	PullBeforeStop bool `json:"pull_before_stop"` // 先拉取镜像再停止
+	// ==================== 重启策略 ====================
+	RestartPolicy     string `json:"restart_policy,omitempty"`      // no/always/on-failure/unless-stopped
+	RestartMaxRetries int    `json:"restart_max_retries,omitempty"` // on-failure 最大重试次数
+
+	// ==================== 部署策略 ====================
+	StopTimeout    int  `json:"stop_timeout,omitempty"`    // 停止超时（秒）
+	RemoveOld      bool `json:"remove_old,omitempty"`      // 移除旧容器
+	KeepOldCount   int  `json:"keep_old_count,omitempty"`  // 保留旧容器数量
+	PullBeforeStop bool `json:"pull_before_stop,omitempty"` // 先拉取镜像再停止
+	AutoRemove     bool `json:"auto_remove,omitempty"`     // 退出时自动删除容器
 }
 
 // PortMapping 端口映射
@@ -651,6 +724,27 @@ type VolumeMount struct {
 	ContainerPath string `json:"container_path"`
 	ReadOnly      bool   `json:"read_only,omitempty"`
 	Type          string `json:"type,omitempty"` // bind, volume, tmpfs
+}
+
+// TmpfsMount tmpfs 挂载
+type TmpfsMount struct {
+	ContainerPath string `json:"container_path"`        // 容器内挂载路径
+	Size          string `json:"size,omitempty"`        // 大小限制 (如 64m, 1g)
+	Mode          int    `json:"mode,omitempty"`        // 权限模式 (如 1777)
+}
+
+// DeviceMapping 设备映射
+type DeviceMapping struct {
+	HostPath      string `json:"host_path"`              // 主机设备路径
+	ContainerPath string `json:"container_path"`         // 容器设备路径
+	Permissions   string `json:"permissions,omitempty"`  // 权限 (rwm)
+}
+
+// Ulimit 资源限制
+type Ulimit struct {
+	Name string `json:"name"`  // 资源名称 (nofile, nproc, core, etc.)
+	Soft int64  `json:"soft"`  // 软限制
+	Hard int64  `json:"hard"`  // 硬限制
 }
 
 // ContainerHealthCheck 容器健康检查
@@ -725,6 +819,83 @@ func (g *GitPullDeployConfig) Scan(value interface{}) error {
 		return nil
 	}
 	return json.Unmarshal(bytes, g)
+}
+
+// KubernetesDeployConfig Kubernetes 部署配置
+type KubernetesDeployConfig struct {
+	// 基础配置
+	Namespace     string `json:"namespace,omitempty"`      // 命名空间
+	ResourceType  string `json:"resource_type,omitempty"`  // deployment/statefulset/daemonset
+	ResourceName  string `json:"resource_name,omitempty"`  // 资源名称
+	ContainerName string `json:"container_name,omitempty"` // 容器名称
+
+	// YAML 配置
+	YAML         string `json:"yaml,omitempty"`          // 完整的 K8s YAML
+	YAMLTemplate string `json:"yaml_template,omitempty"` // YAML 模板
+
+	// 镜像配置
+	Image           string `json:"image,omitempty"`
+	Registry        string `json:"registry,omitempty"`
+	RegistryUser    string `json:"registry_user,omitempty"`
+	RegistryPass    string `json:"registry_pass,omitempty"`
+	ImagePullPolicy string `json:"image_pull_policy,omitempty"`
+	ImagePullSecret string `json:"image_pull_secret,omitempty"`
+
+	// 副本配置
+	Replicas    int  `json:"replicas,omitempty"`
+	AutoScaling bool `json:"auto_scaling,omitempty"`
+
+	// 更新策略
+	UpdateStrategy     string `json:"update_strategy,omitempty"`
+	MaxUnavailable     string `json:"max_unavailable,omitempty"`
+	MaxSurge           string `json:"max_surge,omitempty"`
+	MinReadySeconds    int    `json:"min_ready_seconds,omitempty"`
+	RevisionHistoryLim int    `json:"revision_history_limit,omitempty"`
+
+	// 资源配置
+	CPURequest    string `json:"cpu_request,omitempty"`
+	CPULimit      string `json:"cpu_limit,omitempty"`
+	MemoryRequest string `json:"memory_request,omitempty"`
+	MemoryLimit   string `json:"memory_limit,omitempty"`
+
+	// 环境变量
+	Environment map[string]string `json:"environment,omitempty"`
+
+	// 服务端口
+	ServiceType  string    `json:"service_type,omitempty"`
+	ServicePorts []K8sPort `json:"service_ports,omitempty"`
+
+	// 部署超时
+	DeployTimeout  int `json:"deploy_timeout,omitempty"`
+	RolloutTimeout int `json:"rollout_timeout,omitempty"`
+
+	// kubeconfig
+	KubeConfig  string `json:"kubeconfig,omitempty"`
+	KubeContext string `json:"kube_context,omitempty"`
+}
+
+// K8sPort K8s 端口配置
+type K8sPort struct {
+	Name       string `json:"name,omitempty"`
+	Port       int    `json:"port"`
+	TargetPort int    `json:"target_port"`
+	NodePort   int    `json:"node_port,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+}
+
+func (k KubernetesDeployConfig) Value() (driver.Value, error) {
+	return json.Marshal(k)
+}
+
+func (k *KubernetesDeployConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, k)
 }
 
 // Version 版本（每个项目可创建多个版本）

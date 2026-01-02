@@ -58,6 +58,7 @@ const (
 	CmdReleaseStatus    = "release.status"    // 上报发布状态
 	CmdReleaseCheck     = "release.check"     // 检查安装状态
 	CmdContainerDeploy  = "container.deploy"  // 容器部署
+	CmdK8sDeploy        = "k8s.deploy"        // Kubernetes 部署
 	CmdGitPullDeploy    = "gitpull.deploy"    // Git 拉取部署
 	CmdGitVersions      = "git.versions"      // 获取 Git 仓库版本信息
 
@@ -784,6 +785,86 @@ type GitPullDeployResult struct {
 	StartedAt     string `json:"started_at"`               // 开始时间
 	FinishedAt    string `json:"finished_at"`              // 完成时间
 	Duration      int64  `json:"duration_ms"`              // 耗时（毫秒）
+}
+
+// ============================================================================
+// Kubernetes 部署相关结构
+// ============================================================================
+
+// K8sDeployParams k8s.deploy 命令的参数
+type K8sDeployParams struct {
+	ReleaseID   string               `json:"release_id"`             // 发布ID
+	TargetID    string               `json:"target_id"`              // 目标ID
+	Operation   ReleaseOperationType `json:"operation"`              // 操作类型
+	Version     string               `json:"version"`                // 版本号
+
+	// 基础配置
+	Namespace     string `json:"namespace,omitempty"`      // 命名空间
+	ResourceType  string `json:"resource_type,omitempty"`  // deployment/statefulset/daemonset
+	ResourceName  string `json:"resource_name,omitempty"`  // 资源名称
+	ContainerName string `json:"container_name,omitempty"` // 容器名称
+
+	// YAML 配置
+	YAML         string `json:"yaml,omitempty"`          // 完整的 K8s YAML
+	YAMLTemplate string `json:"yaml_template,omitempty"` // YAML 模板
+
+	// 镜像配置
+	Image           string `json:"image,omitempty"`             // 镜像地址
+	Registry        string `json:"registry,omitempty"`          // 镜像仓库
+	RegistryUser    string `json:"registry_user,omitempty"`     // 仓库用户名
+	RegistryPass    string `json:"registry_pass,omitempty"`     // 仓库密码
+	ImagePullPolicy string `json:"image_pull_policy,omitempty"` // Always/IfNotPresent/Never
+	ImagePullSecret string `json:"image_pull_secret,omitempty"` // imagePullSecrets 名称
+
+	// 副本配置
+	Replicas int `json:"replicas,omitempty"` // 副本数
+
+	// 更新策略
+	UpdateStrategy  string `json:"update_strategy,omitempty"`  // RollingUpdate/Recreate
+	MaxUnavailable  string `json:"max_unavailable,omitempty"`  // 最大不可用
+	MaxSurge        string `json:"max_surge,omitempty"`        // 最大超出
+	MinReadySeconds int    `json:"min_ready_seconds,omitempty"` // 最小就绪时间
+
+	// 资源配置
+	CPURequest    string `json:"cpu_request,omitempty"`    // CPU 请求
+	CPULimit      string `json:"cpu_limit,omitempty"`      // CPU 限制
+	MemoryRequest string `json:"memory_request,omitempty"` // 内存请求
+	MemoryLimit   string `json:"memory_limit,omitempty"`   // 内存限制
+
+	// 环境变量
+	Environment map[string]string `json:"environment,omitempty"`
+
+	// 回滚配置
+	ToRevision int `json:"to_revision,omitempty"` // 回滚到指定版本
+
+	// kubeconfig
+	KubeConfig  string `json:"kubeconfig,omitempty"`   // kubeconfig 路径或内容
+	KubeContext string `json:"kube_context,omitempty"` // context 名称
+
+	// 超时配置
+	Timeout        int `json:"timeout,omitempty"`         // 总超时时间（秒）
+	RolloutTimeout int `json:"rollout_timeout,omitempty"` // 滚动更新超时（秒）
+}
+
+// K8sDeployResult k8s.deploy 命令的结果
+type K8sDeployResult struct {
+	Success       bool   `json:"success"`                    // 是否成功
+	ReleaseID     string `json:"release_id"`                 // 发布ID
+	TargetID      string `json:"target_id"`                  // 目标ID
+	Operation     string `json:"operation"`                  // 操作类型
+	Namespace     string `json:"namespace,omitempty"`        // 命名空间
+	ResourceType  string `json:"resource_type,omitempty"`    // 资源类型
+	ResourceName  string `json:"resource_name,omitempty"`    // 资源名称
+	Image         string `json:"image,omitempty"`            // 部署的镜像
+	Replicas      int    `json:"replicas,omitempty"`         // 副本数
+	ReadyReplicas int    `json:"ready_replicas,omitempty"`   // 就绪副本数
+	Revision      int    `json:"revision,omitempty"`         // 当前 revision
+	RolloutStatus string `json:"rollout_status,omitempty"`   // 滚动更新状态
+	Output        string `json:"output,omitempty"`           // kubectl 输出
+	Error         string `json:"error,omitempty"`            // 错误信息
+	StartedAt     string `json:"started_at"`                 // 开始时间
+	FinishedAt    string `json:"finished_at"`                // 完成时间
+	Duration      int64  `json:"duration_ms"`                // 耗时（毫秒）
 }
 
 // ============================================================================
