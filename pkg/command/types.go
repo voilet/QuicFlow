@@ -70,6 +70,7 @@ const (
 	CmdContainerCollect = "container.collect" // 采集容器信息
 	CmdContainerReport  = "container.report"  // 上报容器信息
 	CmdContainerList    = "container.list"    // 列出容器
+	CmdContainerLogs    = "container.logs"    // 查看容器日志
 
 	// K8s Pod 采集和上报命令
 	CmdK8sCollect = "k8s.collect" // 采集 K8s Pod 信息
@@ -1051,6 +1052,27 @@ type ContainerListResult struct {
 	Success    bool               `json:"success"`
 	Containers []ContainerInfoCmd `json:"containers"`
 	Error      string             `json:"error,omitempty"`
+}
+
+// ContainerLogsParams container.logs 命令的参数
+type ContainerLogsParams struct {
+	ContainerID   string `json:"container_id,omitempty"`   // 容器 ID
+	ContainerName string `json:"container_name,omitempty"` // 容器名称（二选一）
+	Tail          int    `json:"tail,omitempty"`           // 返回最后 N 行，默认 100
+	Since         string `json:"since,omitempty"`          // 从指定时间开始，如 "1h", "30m", "2024-01-01T00:00:00"
+	Until         string `json:"until,omitempty"`          // 到指定时间结束
+	Timestamps    bool   `json:"timestamps,omitempty"`     // 是否显示时间戳
+	Follow        bool   `json:"follow,omitempty"`         // 是否持续跟踪（暂不支持）
+}
+
+// ContainerLogsResult container.logs 命令的结果
+type ContainerLogsResult struct {
+	Success       bool   `json:"success"`
+	ContainerID   string `json:"container_id,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
+	Logs          string `json:"logs"`
+	LineCount     int    `json:"line_count"`
+	Error         string `json:"error,omitempty"`
 }
 
 // ============================================================================

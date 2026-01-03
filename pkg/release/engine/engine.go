@@ -999,6 +999,339 @@ func (e *Engine) ExecuteRemote(clientID, script, workDir string) (string, error)
 	return result.Output, nil
 }
 
+// ExecuteContainerDeployTask 执行容器部署任务（用于 DeployTask）
+func (e *Engine) ExecuteContainerDeployTask(clientID string, operation models.OperationType, version string, config *models.ContainerDeployConfig, containerImage string) (string, error) {
+	if e.remoteExec == nil {
+		return "", fmt.Errorf("remote executor not configured")
+	}
+
+	ctx := context.Background()
+
+	// 确定镜像地址
+	image := containerImage
+	if image == "" && config != nil {
+		image = config.Image
+	}
+	if image == "" {
+		return "", fmt.Errorf("container image is required")
+	}
+
+	// 确定容器名称
+	containerName := ""
+	if config != nil {
+		containerName = config.ContainerName
+	}
+	if containerName == "" {
+		containerName = "app"
+	}
+
+	result, err := e.remoteExec.ExecuteContainerDeploy(ctx, &executor.ContainerDeployRequest{
+		ClientID:      clientID,
+		Operation:     operation,
+		Version:       version,
+		Config:        config,
+		Image:         image,
+		ContainerName: containerName,
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if !result.Success {
+		return result.Output, fmt.Errorf("%s", result.Error)
+	}
+
+	return result.Output, nil
+}
+
+// ExecuteContainerDeployWithMergedConfig 使用合并后的最终配置执行容器部署
+// 用于支持三层配置合并（项目 + 版本 + 任务覆盖）
+func (e *Engine) ExecuteContainerDeployWithMergedConfig(
+	clientID string,
+	operation models.OperationType,
+	version string,
+	finalConfig *models.FinalContainerConfig,
+) (string, error) {
+	if e.remoteExec == nil {
+		return "", fmt.Errorf("remote executor not configured")
+	}
+
+	if finalConfig == nil {
+		return "", fmt.Errorf("final config is required")
+	}
+
+	if finalConfig.Image == "" {
+		return "", fmt.Errorf("container image is required")
+	}
+
+	containerName := finalConfig.ContainerName
+	if containerName == "" {
+		containerName = "app"
+	}
+
+	ctx := context.Background()
+
+	// 从 FinalContainerConfig 创建临时的 ContainerDeployConfig 用于远程执行
+	// 这保持了与现有执行器的兼容性
+	tempConfig := &models.ContainerDeployConfig{
+		Image:           finalConfig.Image,
+		Registry:        finalConfig.Registry,
+		RegistryUser:    finalConfig.RegistryUser,
+		RegistryPass:    finalConfig.RegistryPass,
+		ImagePullPolicy: finalConfig.ImagePullPolicy,
+		ContainerName:   finalConfig.ContainerName,
+		Hostname:        finalConfig.Hostname,
+		User:            finalConfig.User,
+		WorkingDir:      finalConfig.WorkingDir,
+		Environment:     finalConfig.Environment,
+		Labels:          finalConfig.Labels,
+		Command:         finalConfig.Command,
+		Entrypoint:      finalConfig.Entrypoint,
+		Ports:           finalConfig.Ports,
+		NetworkMode:     finalConfig.NetworkMode,
+		Networks:        finalConfig.Networks,
+		DNS:             finalConfig.DNS,
+		ExtraHosts:      finalConfig.ExtraHosts,
+		Volumes:         finalConfig.Volumes,
+		TmpfsMounts:     finalConfig.TmpfsMounts,
+		Privileged:      finalConfig.Privileged,
+		CapAdd:          finalConfig.CapAdd,
+		CapDrop:         finalConfig.CapDrop,
+		SecurityOpt:     finalConfig.SecurityOpt,
+		ReadOnlyRootfs:  finalConfig.ReadOnlyRootfs,
+		Devices:         finalConfig.Devices,
+		GPUs:            finalConfig.GPUs,
+		MemoryLimit:     finalConfig.MemoryLimit,
+		MemoryReserve:   finalConfig.MemoryReserve,
+		CPULimit:        finalConfig.CPULimit,
+		CPUShares:       finalConfig.CPUShares,
+		Runtime:         finalConfig.Runtime,
+		Init:            finalConfig.Init,
+		StopSignal:      finalConfig.StopSignal,
+		Sysctls:         finalConfig.Sysctls,
+		LogDriver:       finalConfig.LogDriver,
+		LogOpts:         finalConfig.LogOpts,
+		HealthCheck:     finalConfig.HealthCheck,
+		RestartPolicy:   finalConfig.RestartPolicy,
+		StopTimeout:     finalConfig.StopTimeout,
+		RemoveOld:       finalConfig.RemoveOld,
+		PullBeforeStop:  finalConfig.PullBeforeStop,
+		AutoRemove:      finalConfig.AutoRemove,
+	}
+
+	result, err := e.remoteExec.ExecuteContainerDeploy(ctx, &executor.ContainerDeployRequest{
+		ClientID:      clientID,
+		Operation:     operation,
+		Version:       version,
+		Config:        tempConfig,
+		Image:         finalConfig.Image,
+		ContainerName: containerName,
+		Environment:   finalConfig.Environment,
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if !result.Success {
+		return result.Output, fmt.Errorf("%s", result.Error)
+	}
+
+	return result.Output, nil
+}
+
+// ExecuteK8sDeployWithMergedConfig 使用合并后的最终配置执行 K8s 部署
+// 用于支持三层配置合并（项目 + 版本 + 任务覆盖）
+func (e *Engine) ExecuteK8sDeployWithMergedConfig(
+	clientID string,
+	operation models.OperationType,
+	version string,
+	finalConfig *models.FinalK8sConfig,
+) (string, error) {
+	if e.remoteExec == nil {
+		return "", fmt.Errorf("remote executor not configured")
+	}
+
+	if finalConfig == nil {
+		return "", fmt.Errorf("final config is required")
+	}
+
+	if finalConfig.Image == "" && finalConfig.YAML == "" && finalConfig.YAMLTemplate == "" {
+		return "", fmt.Errorf("image or yaml is required for k8s deployment")
+	}
+
+	ctx := context.Background()
+
+	// 从 FinalK8sConfig 创建临时的 KubernetesDeployConfig 用于远程执行
+	tempConfig := &models.KubernetesDeployConfig{
+		KubeConfig:      finalConfig.KubeConfig,
+		KubeContext:     finalConfig.KubeContext,
+		Namespace:       finalConfig.Namespace,
+		ResourceType:    finalConfig.ResourceType,
+		ResourceName:    finalConfig.ResourceName,
+		ContainerName:   finalConfig.ContainerName,
+		Image:           finalConfig.Image,
+		Registry:        finalConfig.Registry,
+		ImagePullPolicy: finalConfig.ImagePullPolicy,
+		ImagePullSecret: finalConfig.ImagePullSecret,
+		Replicas:        finalConfig.Replicas,
+		AutoScaling:     finalConfig.AutoScaling,
+		CPURequest:      finalConfig.CPURequest,
+		CPULimit:        finalConfig.CPULimit,
+		MemoryRequest:   finalConfig.MemoryRequest,
+		MemoryLimit:     finalConfig.MemoryLimit,
+		Environment:     finalConfig.Environment,
+		ServiceType:     finalConfig.ServiceType,
+		ServicePorts:    finalConfig.ServicePorts,
+		UpdateStrategy:  finalConfig.UpdateStrategy,
+		MaxUnavailable:  finalConfig.MaxUnavailable,
+		MaxSurge:        finalConfig.MaxSurge,
+		MinReadySeconds: finalConfig.MinReadySeconds,
+		DeployTimeout:   finalConfig.DeployTimeout,
+		RolloutTimeout:  finalConfig.RolloutTimeout,
+		YAML:            finalConfig.YAML,
+		YAMLTemplate:    finalConfig.YAMLTemplate,
+	}
+
+	result, err := e.remoteExec.ExecuteK8sDeploy(ctx, &executor.K8sDeployRequest{
+		ClientID:    clientID,
+		Operation:   operation,
+		Version:     version,
+		Config:      tempConfig,
+		Image:       finalConfig.Image,
+		YAML:        finalConfig.YAML,
+		Environment: finalConfig.Environment,
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if !result.Success {
+		return result.Output, fmt.Errorf("%s", result.Error)
+	}
+
+	return result.Output, nil
+}
+
+// ExecuteGitPullDeployTask 执行 Git 拉取部署任务（用于 DeployTask）
+// 合并项目配置和版本配置
+func (e *Engine) ExecuteGitPullDeployTask(
+	clientID string,
+	operation models.OperationType,
+	version string,
+	projectConfig *models.GitPullDeployConfig,
+	versionWorkDir string,
+	gitRef string,
+	gitRefType string,
+) (string, error) {
+	if e.remoteExec == nil {
+		return "", fmt.Errorf("remote executor not configured")
+	}
+
+	if projectConfig == nil {
+		return "", fmt.Errorf("git pull config is required")
+	}
+
+	ctx := context.Background()
+
+	// 合并工作目录：
+	// 1. 项目配置优先（GitPullConfig 的 WorkDir 是权威配置）
+	// 2. 版本配置只在非默认值且项目配置为空时使用
+	// 3. 最后使用默认值
+	workDir := projectConfig.WorkDir
+	if workDir == "" {
+		// 项目没配置，使用版本配置（但忽略默认值 /opt/app）
+		if versionWorkDir != "" && versionWorkDir != "/opt/app" {
+			workDir = versionWorkDir
+		}
+	}
+	if workDir == "" {
+		workDir = "/opt/app"
+	}
+
+	// 确定 Git 引用
+	branch := projectConfig.Branch
+	tag := projectConfig.Tag
+	commit := projectConfig.Commit
+
+	// 版本的 GitRef 覆盖项目配置
+	if gitRef != "" {
+		switch gitRefType {
+		case "tag":
+			tag = gitRef
+			branch = ""
+			commit = ""
+		case "branch":
+			branch = gitRef
+			tag = ""
+			commit = ""
+		case "commit":
+			commit = gitRef
+			tag = ""
+		}
+	}
+
+	// 构建配置副本（防止修改原始配置）
+	config := &models.GitPullDeployConfig{
+		RepoURL:       projectConfig.RepoURL,
+		Branch:        branch,
+		Tag:           tag,
+		Commit:        commit,
+		Depth:         projectConfig.Depth,
+		Submodules:    projectConfig.Submodules,
+		AuthType:      projectConfig.AuthType,
+		SSHKey:        projectConfig.SSHKey,
+		Token:         projectConfig.Token,
+		Username:      projectConfig.Username,
+		Password:      projectConfig.Password,
+		WorkDir:       workDir,
+		CleanBefore:   projectConfig.CleanBefore,
+		BackupBefore:  projectConfig.BackupBefore,
+		BackupDir:     projectConfig.BackupDir,
+		BackupKeep:    projectConfig.BackupKeep,
+		PreScript:     projectConfig.PreScript,
+		PostScript:    projectConfig.PostScript,
+		Environment:   projectConfig.Environment,
+		Interpreter:   projectConfig.Interpreter,
+		CloneTimeout:  projectConfig.CloneTimeout,
+		ScriptTimeout: projectConfig.ScriptTimeout,
+	}
+
+	result, err := e.remoteExec.ExecuteGitPullDeploy(ctx, &executor.GitPullDeployRequest{
+		ClientID:    clientID,
+		Operation:   operation,
+		Version:     version,
+		Config:      config,
+		RepoURL:     config.RepoURL,
+		Branch:      config.Branch,
+		WorkDir:     workDir,
+		PreScript:   config.PreScript,
+		PostScript:  config.PostScript,
+		Environment: config.Environment,
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if !result.Success {
+		return result.GitOutput + "\n" + result.ScriptOutput, fmt.Errorf("%s", result.Error)
+	}
+
+	// 返回完整输出
+	output := result.GitOutput
+	if result.ScriptOutput != "" {
+		output += "\n" + result.ScriptOutput
+	}
+	if result.Commit != "" {
+		output += "\nCommit: " + result.Commit
+	}
+
+	return output, nil
+}
+
 // FetchGitVersions 获取 Git 仓库版本信息
 func (e *Engine) FetchGitVersions(ctx context.Context, clientID string, config *models.GitPullDeployConfig, maxTags, maxCommits int, includeBranches bool) (*executor.GitVersionsResult, error) {
 	if e.remoteExec == nil {

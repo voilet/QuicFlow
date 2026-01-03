@@ -612,14 +612,23 @@ func (b *DockerCommandBuilder) BuildDeployScript(containerName string) (string, 
 	script.WriteString("# Run container\n")
 	script.WriteString(runCmd + "\n\n")
 
+	// 获取并输出 Container ID（无论成功失败都尝试获取）
+	script.WriteString("# Get container ID\n")
+	script.WriteString(fmt.Sprintf(`CONTAINER_ID=$(docker inspect --format='{{.Id}}' %s 2>/dev/null || echo "")
+if [ -n "$CONTAINER_ID" ]; then
+    echo "DEPLOY_CONTAINER_ID=$CONTAINER_ID"
+fi
+`, containerName))
+
 	// 等待健康检查
 	if b.config.HealthCheck != nil && len(b.config.HealthCheck.Command) > 0 {
-		script.WriteString("# Wait for container to be healthy\n")
+		script.WriteString("\n# Wait for container to be healthy\n")
 		script.WriteString(fmt.Sprintf(`
 for i in $(seq 1 30); do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' %s 2>/dev/null || echo "unknown")
     if [ "$STATUS" = "healthy" ]; then
         echo "Container is healthy"
+        echo "Deployment completed successfully"
         exit 0
     fi
     echo "Waiting for container to be healthy... ($i/30)"
@@ -629,9 +638,9 @@ done
 echo "Container health check timeout"
 exit 1
 `, containerName))
+	} else {
+		script.WriteString("\necho 'Deployment completed successfully'\n")
 	}
-
-	script.WriteString("\necho 'Deployment completed successfully'\n")
 
 	return script.String(), nil
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -66,6 +67,9 @@ func NewHTTPServer(addr string, serverAPI ServerAPI, commandManager *command.Com
 		api.POST("/command/multi/:id/cancel", h.handleCancelMultiCommand) // 停止多播任务
 		api.GET("/command/:id", h.handleGetCommand)
 		api.GET("/commands", h.handleListCommands)
+
+		// 容器管理接口
+		api.POST("/containers/logs", h.handleContainerLogs) // 查看容器日志
 	}
 	h.router.GET("/health", h.handleHealth)
 
@@ -644,4 +648,88 @@ func (h *HTTPServer) AddSetupRoutes(setupAPI *SetupAPI) {
 	api := h.router.Group("/api")
 	setupAPI.RegisterRoutes(api)
 	h.logger.Info("Setup API routes added")
+}
+
+// ContainerLogsRequest 查看容器日志请求
+type ContainerLogsRequest struct {
+	ClientID      string `json:"client_id" binding:"required"`
+	ContainerID   string `json:"container_id"`
+	ContainerName string `json:"container_name"`
+	Tail          int    `json:"tail"`
+	Since         string `json:"since"`
+	Until         string `json:"until"`
+	Timestamps    bool   `json:"timestamps"`
+}
+
+// handleContainerLogs 处理查看容器日志请求
+func (h *HTTPServer) handleContainerLogs(c *gin.Context) {
+	if h.commandManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Command manager not initialized",
+		})
+		return
+	}
+
+	var req ContainerLogsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Invalid request body: %v", err),
+		})
+		return
+	}
+
+	// 验证必须提供 container_id 或 container_name
+	if req.ContainerID == "" && req.ContainerName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "container_id or container_name is required",
+		})
+		return
+	}
+
+	// 构造命令参数
+	params := command.ContainerLogsParams{
+		ContainerID:   req.ContainerID,
+		ContainerName: req.ContainerName,
+		Tail:          req.Tail,
+		Since:         req.Since,
+		Until:         req.Until,
+		Timestamps:    req.Timestamps,
+	}
+
+	payloadBytes, err := json.Marshal(params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to marshal params: %v", err),
+		})
+		return
+	}
+
+	// 设置超时（容器日志获取可能需要一点时间）
+	timeout := 30 * time.Second
+
+	// 下发命令
+	cmd, err := h.commandManager.SendCommand(req.ClientID, command.CmdContainerLogs, payloadBytes, timeout)
+	if err != nil {
+		h.logger.Error("Failed to send container logs command",
+			"client_id", req.ClientID,
+			"error", err,
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to send command: %v", err),
+		})
+		return
+	}
+
+	h.logger.Info("Container logs command sent",
+		"command_id", cmd.CommandID,
+		"client_id", req.ClientID,
+		"container_id", req.ContainerID,
+		"container_name", req.ContainerName,
+	)
+
+	c.JSON(http.StatusOK, command.CommandResponse{
+		Success:   true,
+		CommandID: cmd.CommandID,
+		Message:   "Container logs command sent successfully",
+	})
 }

@@ -194,6 +194,198 @@ func (h *HTTPServer) AddStreamRoutes() {
 	api := h.router.Group("/api")
 	{
 		api.POST("/command/stream", h.handleStreamMultiCommand)
+		api.GET("/containers/logs/stream", h.handleContainerLogsStream)
 	}
 	h.logger.Info("Stream API routes registered")
+}
+
+// ContainerLogsStreamRequest 容器日志流式请求参数
+type ContainerLogsStreamRequest struct {
+	ClientID      string `form:"client_id" binding:"required"`
+	ContainerID   string `form:"container_id"`
+	ContainerName string `form:"container_name"`
+	Tail          int    `form:"tail"`
+	Timestamps    bool   `form:"timestamps"`
+}
+
+// ContainerLogsStreamEvent SSE 事件
+type ContainerLogsStreamEvent struct {
+	Type      string `json:"type"` // "start", "logs", "error", "complete"
+	Logs      string `json:"logs,omitempty"`
+	LineCount int    `json:"line_count,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+}
+
+// handleContainerLogsStream 处理容器日志流式请求 (SSE)
+// GET /api/containers/logs/stream?client_id=xxx&container_id=xxx
+func (h *HTTPServer) handleContainerLogsStream(c *gin.Context) {
+	if h.commandManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Command manager not initialized",
+		})
+		return
+	}
+
+	var req ContainerLogsStreamRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Invalid query parameters: %v", err),
+		})
+		return
+	}
+
+	// 验证必须提供 container_id 或 container_name
+	if req.ContainerID == "" && req.ContainerName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "container_id or container_name is required",
+		})
+		return
+	}
+
+	// 设置 SSE 响应头
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// 获取底层 ResponseWriter 并启用 Flusher
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Streaming not supported",
+		})
+		return
+	}
+
+	h.logger.Info("Container logs stream started",
+		"client_id", req.ClientID,
+		"container_id", req.ContainerID,
+		"container_name", req.ContainerName,
+	)
+
+	// 发送开始事件
+	startEvent := ContainerLogsStreamEvent{
+		Type:      "start",
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(startEvent)
+	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// 构造命令参数
+	tail := req.Tail
+	if tail <= 0 {
+		tail = 100
+	}
+
+	params := command.ContainerLogsParams{
+		ContainerID:   req.ContainerID,
+		ContainerName: req.ContainerName,
+		Tail:          tail,
+		Timestamps:    req.Timestamps,
+	}
+
+	// 记录已发送的日志行数，用于去重
+	lastLineCount := 0
+	lastLogs := ""
+
+	// 轮询间隔
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	// 监听客户端断开连接
+	clientGone := c.Request.Context().Done()
+
+	// 首次立即获取日志
+	h.fetchAndSendLogs(c, flusher, req.ClientID, params, &lastLogs, &lastLineCount)
+
+	// 持续轮询获取新日志
+	for {
+		select {
+		case <-clientGone:
+			h.logger.Info("Container logs stream client disconnected",
+				"client_id", req.ClientID,
+			)
+			return
+		case <-ticker.C:
+			// 获取最新日志
+			h.fetchAndSendLogs(c, flusher, req.ClientID, params, &lastLogs, &lastLineCount)
+		}
+	}
+}
+
+// fetchAndSendLogs 获取并发送容器日志
+func (h *HTTPServer) fetchAndSendLogs(c *gin.Context, flusher http.Flusher, clientID string, params command.ContainerLogsParams, lastLogs *string, lastLineCount *int) {
+	payloadBytes, err := json.Marshal(params)
+	if err != nil {
+		return
+	}
+
+	// 发送命令获取日志
+	timeout := 10 * time.Second
+	cmd, err := h.commandManager.SendCommand(clientID, command.CmdContainerLogs, payloadBytes, timeout)
+	if err != nil {
+		event := ContainerLogsStreamEvent{
+			Type:      "error",
+			Error:     fmt.Sprintf("Failed to send command: %v", err),
+			Timestamp: time.Now().UnixMilli(),
+		}
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	// 等待命令完成
+	result := h.waitForCommandResult(cmd.CommandID, timeout)
+	if result == nil {
+		return
+	}
+
+	if result.Status != command.CommandStatusCompleted {
+		event := ContainerLogsStreamEvent{
+			Type:      "error",
+			Error:     fmt.Sprintf("Command failed: %s", result.Error),
+			Timestamp: time.Now().UnixMilli(),
+		}
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	// 解析结果
+	var logsResult command.ContainerLogsResult
+	if err := json.Unmarshal(result.Result, &logsResult); err != nil {
+		return
+	}
+
+	if !logsResult.Success {
+		event := ContainerLogsStreamEvent{
+			Type:      "error",
+			Error:     logsResult.Error,
+			Timestamp: time.Now().UnixMilli(),
+		}
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	// 检查是否有新日志（简单比较）
+	if logsResult.Logs != *lastLogs {
+		*lastLogs = logsResult.Logs
+		*lastLineCount = logsResult.LineCount
+
+		event := ContainerLogsStreamEvent{
+			Type:      "logs",
+			Logs:      logsResult.Logs,
+			LineCount: logsResult.LineCount,
+			Timestamp: time.Now().UnixMilli(),
+		}
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 }

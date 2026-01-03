@@ -110,18 +110,26 @@ func (c *Client) FetchVersions(ctx context.Context, req *FetchVersionsRequest) (
 	if len(tags) > maxTags {
 		tags = tags[:maxTags]
 	}
-	result.Tags = tags
 
 	// 解析分支
+	var defaultBranch string
 	if req.IncludeBranches {
-		branches, defaultBranch := c.parseBranches(refs)
+		branches, db := c.parseBranches(refs)
 		result.Branches = branches
-		result.DefaultBranch = defaultBranch
+		defaultBranch = db
+		result.DefaultBranch = db
 	} else {
 		// 只获取默认分支
-		_, defaultBranch := c.parseBranches(refs)
-		result.DefaultBranch = defaultBranch
+		_, db := c.parseBranches(refs)
+		defaultBranch = db
+		result.DefaultBranch = db
 	}
+
+	// 获取 tag 的 commit messages（需要浅克隆）
+	if len(tags) > 0 {
+		tags, _ = c.fetchTagMessages(ctx, authURL, tags, defaultBranch)
+	}
+	result.Tags = tags
 
 	// 获取最近提交（从默认分支）
 	if maxCommits > 0 && result.DefaultBranch != "" {
@@ -351,6 +359,53 @@ func (c *Client) fetchRecentCommits(ctx context.Context, repoURL, branch string,
 	}
 
 	return commits, nil
+}
+
+// fetchTagMessages 获取 tag 对应的 commit messages
+func (c *Client) fetchTagMessages(ctx context.Context, repoURL string, tags []command.GitTag, defaultBranch string) ([]command.GitTag, error) {
+	if len(tags) == 0 {
+		return tags, nil
+	}
+
+	// 创建临时目录进行浅克隆
+	tmpDir, err := os.MkdirTemp("", "git-tag-*")
+	if err != nil {
+		return tags, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 克隆仓库（获取所有 tags）
+	branch := defaultBranch
+	if branch == "" {
+		branch = "main"
+	}
+	cloneCmd := exec.CommandContext(ctx, "git", "clone",
+		"--depth", "1",
+		"--single-branch",
+		"--branch", branch,
+		repoURL,
+		tmpDir,
+	)
+	cloneCmd.Env = os.Environ()
+	if err := cloneCmd.Run(); err != nil {
+		return tags, fmt.Errorf("clone: %w", err)
+	}
+
+	// fetch 所有 tags
+	fetchCmd := exec.CommandContext(ctx, "git", "-C", tmpDir, "fetch", "--tags", "--depth=1")
+	fetchCmd.Env = os.Environ()
+	fetchCmd.Run() // 忽略错误
+
+	// 获取每个 tag 的 commit message
+	for i := range tags {
+		// 使用 git log 获取 tag 对应的 commit message
+		logCmd := exec.CommandContext(ctx, "git", "-C", tmpDir, "log", "-1", "--format=%s", tags[i].Name)
+		if output, err := logCmd.Output(); err == nil {
+			tags[i].Message = strings.TrimSpace(string(output))
+		}
+	}
+
+	return tags, nil
 }
 
 // compareVersions 比较版本号（语义化版本）

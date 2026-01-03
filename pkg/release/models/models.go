@@ -708,6 +708,13 @@ type ContainerDeployConfig struct {
 	KeepOldCount   int  `json:"keep_old_count,omitempty"`  // 保留旧容器数量
 	PullBeforeStop bool `json:"pull_before_stop,omitempty"` // 先拉取镜像再停止
 	AutoRemove     bool `json:"auto_remove,omitempty"`     // 退出时自动删除容器
+
+	// ==================== 默认资源限制（可被版本/任务覆盖） ====================
+	DefaultResources *ResourceLimits `json:"default_resources,omitempty"`
+
+	// ==================== 部署脚本（默认，可被版本覆盖） ====================
+	PreScript  string `json:"pre_script,omitempty"`  // 部署前脚本
+	PostScript string `json:"post_script,omitempty"` // 部署后脚本
 }
 
 // PortMapping 端口映射
@@ -754,6 +761,97 @@ type ContainerHealthCheck struct {
 	Timeout     int      `json:"timeout,omitempty"`     // 超时时间（秒）
 	Retries     int      `json:"retries,omitempty"`     // 重试次数
 	StartPeriod int      `json:"start_period,omitempty"` // 启动等待期（秒）
+}
+
+// ==================== 配置分层设计 ====================
+
+// ResourceLimits 资源限制（可被版本/任务覆盖）
+type ResourceLimits struct {
+	CPURequest    string `json:"cpu_request,omitempty"`    // CPU 请求 (100m, 0.5)
+	CPULimit      string `json:"cpu_limit,omitempty"`      // CPU 限制 (500m, 1)
+	MemoryRequest string `json:"memory_request,omitempty"` // 内存请求 (128Mi, 256m)
+	MemoryLimit   string `json:"memory_limit,omitempty"`   // 内存限制 (512Mi, 1g)
+}
+
+// VersionDeployConfig 版本部署配置（发布单元）
+// 用于定义"运行什么"，每次发布创建新版本时配置
+type VersionDeployConfig struct {
+	// ========== 镜像配置 ==========
+	Image string `json:"image"` // 镜像地址或 tag（必填）
+
+	// ========== 环境变量（增量合并到项目配置） ==========
+	Environment map[string]string `json:"environment,omitempty"`
+
+	// ========== 资源限制覆盖 ==========
+	Resources *ResourceLimits `json:"resources,omitempty"`
+
+	// ========== K8s 副本数覆盖 ==========
+	Replicas *int `json:"replicas,omitempty"`
+
+	// ========== 启动命令覆盖 ==========
+	Command    []string `json:"command,omitempty"`
+	Entrypoint []string `json:"entrypoint,omitempty"`
+	WorkingDir string   `json:"working_dir,omitempty"`
+
+	// ========== 健康检查覆盖（完全替换项目配置） ==========
+	HealthCheck *ContainerHealthCheck `json:"health_check,omitempty"`
+
+	// ========== 部署脚本（版本特定） ==========
+	PreScript  string `json:"pre_script,omitempty"`  // 部署前脚本
+	PostScript string `json:"post_script,omitempty"` // 部署后脚本
+
+	// ========== K8s YAML 覆盖（高级） ==========
+	K8sYAMLPatch string `json:"k8s_yaml_patch,omitempty"` // YAML patch
+	K8sYAMLFull  string `json:"k8s_yaml_full,omitempty"`  // 完整 YAML（忽略其他配置）
+}
+
+func (v VersionDeployConfig) Value() (driver.Value, error) {
+	return json.Marshal(v)
+}
+
+func (v *VersionDeployConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, v)
+}
+
+// TaskOverrideConfig 任务覆盖配置（执行覆盖）
+// 用于临时调整，如金丝雀、A/B 测试、紧急扩容等场景
+type TaskOverrideConfig struct {
+	// ========== 镜像覆盖（临时） ==========
+	Image string `json:"image,omitempty"` // 用于测试未发布的镜像
+
+	// ========== 环境变量追加（临时） ==========
+	EnvironmentAdd map[string]string `json:"environment_add,omitempty"` // 追加到版本环境变量之上
+
+	// ========== 资源覆盖（临时） ==========
+	Resources *ResourceLimits `json:"resources,omitempty"` // 紧急扩容或金丝雀使用不同资源
+
+	// ========== 副本数覆盖（临时） ==========
+	Replicas *int `json:"replicas,omitempty"` // 紧急扩缩容
+
+	// ========== 启动命令覆盖（临时，调试用） ==========
+	Command []string `json:"command,omitempty"`
+}
+
+func (t TaskOverrideConfig) Value() (driver.Value, error) {
+	return json.Marshal(t)
+}
+
+func (t *TaskOverrideConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(bytes, t)
 }
 
 func (c ContainerDeployConfig) Value() (driver.Value, error) {
@@ -872,6 +970,14 @@ type KubernetesDeployConfig struct {
 	// kubeconfig
 	KubeConfig  string `json:"kubeconfig,omitempty"`
 	KubeContext string `json:"kube_context,omitempty"`
+
+	// 默认配置（可被版本/任务覆盖）
+	DefaultReplicas  int             `json:"default_replicas,omitempty"`  // 默认副本数
+	DefaultResources *ResourceLimits `json:"default_resources,omitempty"` // 默认资源限制
+
+	// 部署脚本（默认，可被版本覆盖）
+	PreScript  string `json:"pre_script,omitempty"`  // 部署前脚本
+	PostScript string `json:"post_script,omitempty"` // 部署后脚本
 }
 
 // K8sPort K8s 端口配置
@@ -916,11 +1022,14 @@ type Version struct {
 	GitRef     string `gorm:"size:200" json:"git_ref"`      // tag/branch/commit 值
 	GitRefType string `gorm:"size:20" json:"git_ref_type"`  // tag/branch/commit 类型
 
-	// 容器相关字段（用于 container/kubernetes 类型项目）
+	// 容器相关字段（用于 container/kubernetes 类型项目）- 保留用于向后兼容
 	ContainerImage string `gorm:"size:500" json:"container_image"` // 镜像地址
 	ContainerEnv   string `gorm:"type:text" json:"container_env"`  // 环境变量（KEY=value 格式）
 	Replicas       int    `gorm:"default:1" json:"replicas"`       // K8s 副本数
 	K8sYAML        string `gorm:"type:text" json:"k8s_yaml"`       // K8s YAML 配置
+
+	// 新版部署配置（统一的版本配置，推荐使用）
+	DeployConfig *VersionDeployConfig `gorm:"type:jsonb" json:"deploy_config,omitempty"`
 
 	// 进程监控配置（部署后自动采集进程信息）
 	ProcessConfig *ProcessMonitorConfig `gorm:"type:jsonb" json:"process_config,omitempty"`
@@ -981,6 +1090,9 @@ type DeployTask struct {
 	FailureStrategy string `gorm:"size:20;default:'continue'" json:"failure_strategy"` // continue, pause, abort
 	AutoRollback    bool   `gorm:"default:true" json:"auto_rollback"`                  // 升级失败自动回滚
 
+	// 任务覆盖配置（用于金丝雀、A/B测试、紧急扩容等场景）
+	OverrideConfig *TaskOverrideConfig `gorm:"type:jsonb" json:"override_config,omitempty"`
+
 	// 任务状态
 	Status       string `gorm:"size:20;default:'pending';index" json:"status"` // pending, scheduled, running, canary, paused, completed, failed, cancelled
 	TotalCount   int    `gorm:"default:0" json:"total_count"`
@@ -1035,14 +1147,15 @@ func (t *DeployTaskResults) Scan(value interface{}) error {
 
 // DeployTaskResult 单个目标的执行结果
 type DeployTaskResult struct {
-	ClientID   string     `json:"client_id"`
-	Status     string     `json:"status"` // pending, running, success, failed, skipped
-	IsCanary   bool       `json:"is_canary"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Duration   int        `json:"duration"` // 秒
-	Error      string     `json:"error,omitempty"`
-	Output     string     `json:"output,omitempty"`
+	ClientID    string     `json:"client_id"`
+	Status      string     `json:"status"` // pending, running, success, failed, skipped
+	IsCanary    bool       `json:"is_canary"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	Duration    int        `json:"duration"` // 秒
+	Error       string     `json:"error,omitempty"`
+	Output      string     `json:"output,omitempty"`
+	ContainerID string     `json:"container_id,omitempty"` // 容器部署时的 Container ID
 }
 
 // TargetInstallation 目标安装状态
@@ -1135,10 +1248,11 @@ type DeployLog struct {
 	IsCanary  bool          `gorm:"default:false" json:"is_canary"`
 
 	// 执行结果
-	Status   string `gorm:"size:20;not null;index" json:"status"` // success, failed, skipped, rollback
-	ExitCode int    `gorm:"default:0" json:"exit_code"`
-	Output   string `gorm:"type:text" json:"output,omitempty"`
-	Error    string `gorm:"type:text" json:"error,omitempty"`
+	Status      string `gorm:"size:20;not null;index" json:"status"` // success, failed, skipped, rollback
+	ExitCode    int    `gorm:"default:0" json:"exit_code"`
+	Output      string `gorm:"type:text" json:"output,omitempty"`
+	Error       string `gorm:"type:text" json:"error,omitempty"`
+	ContainerID string `gorm:"size:100;index" json:"container_id,omitempty"` // 容器部署时的 Container ID
 
 	// 时间信息
 	StartedAt  time.Time `gorm:"not null" json:"started_at"`
@@ -1369,6 +1483,28 @@ type ContainerInfo struct {
 	MatchedPrefix  string `json:"matched_prefix,omitempty"`
 }
 
+// ==================== 实时部署日志模型 ====================
+
+// DeployTaskLog 部署任务执行日志（用于实时日志流）
+type DeployTaskLog struct {
+	ID       string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	TaskID   string `gorm:"type:uuid;index;not null" json:"task_id"`
+	ClientID string `gorm:"size:100;index;not null" json:"client_id"`
+
+	// 日志内容
+	Level   string `gorm:"size:20;default:'info'" json:"level"` // info, warn, error, debug
+	Stage   string `gorm:"size:50" json:"stage,omitempty"`      // pull, stop, remove, run, health_check, script, git_clone, etc.
+	Message string `gorm:"type:text;not null" json:"message"`
+
+	// 时间戳
+	Timestamp time.Time `gorm:"index;not null" json:"timestamp"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (DeployTaskLog) TableName() string {
+	return "deploy_task_logs"
+}
+
 // ==================== 数据库迁移 ====================
 
 // AllModels 所有模型列表
@@ -1381,6 +1517,7 @@ var AllModels = []interface{}{
 	&Version{},
 	&DeployTask{},
 	&DeployLog{},
+	&DeployTaskLog{},
 	&Release{},
 	&TargetInstallation{},
 	&StatusReport{},

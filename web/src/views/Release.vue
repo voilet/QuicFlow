@@ -245,9 +245,15 @@
                     <el-radio-button value="canary">金丝雀中</el-radio-button>
                     <el-radio-button value="completed">已完成</el-radio-button>
                   </el-radio-group>
-                  <el-tag type="info" size="small" class="task-count-tag">
-                    {{ filteredTasks.length }} 个任务
-                  </el-tag>
+                  <div class="tab-header-right">
+                    <el-tag type="info" size="small" class="task-count-tag">
+                      {{ filteredTasks.length }} 个任务
+                    </el-tag>
+                    <el-button size="small" @click="loadTasks" :loading="loadingTasks">
+                      <el-icon><Refresh /></el-icon>
+                      刷新
+                    </el-button>
+                  </div>
                 </div>
 
                 <div class="tasks-table-wrapper">
@@ -305,7 +311,7 @@
                         <span v-else class="table-cell-empty">-</span>
                       </template>
                     </el-table-column>
-                    <el-table-column label="操作" min-width="220" fixed="right">
+                    <el-table-column label="操作" min-width="280" fixed="right">
                       <template #default="{ row }">
                         <div class="task-actions">
                           <template v-if="row.status === 'pending'">
@@ -320,6 +326,25 @@
                             <el-button type="warning" size="small" @click="pauseTask(row)">暂停</el-button>
                           </template>
                           <el-button size="small" @click="viewTask(row)">详情</el-button>
+                          <!-- 实时部署日志按钮（所有部署类型都可用） -->
+                          <el-button
+                            size="small"
+                            :type="row.status === 'running' || row.status === 'canary' ? 'primary' : 'info'"
+                            @click="showDeployLogs(row)"
+                          >
+                            <el-icon><Document /></el-icon>
+                            {{ row.status === 'running' || row.status === 'canary' ? '实时日志' : '执行日志' }}
+                          </el-button>
+                          <!-- 容器日志按钮（仅容器项目） -->
+                          <el-button
+                            v-if="selectedProject?.type === 'container' && (row.status === 'completed' || row.status === 'failed')"
+                            size="small"
+                            type="success"
+                            @click="showTaskLogsDialog(row)"
+                          >
+                            <el-icon><Document /></el-icon>
+                            容器日志
+                          </el-button>
                         </div>
                       </template>
                     </el-table-column>
@@ -329,6 +354,19 @@
 
               <!-- 部署记录 -->
               <el-tab-pane label="部署日志" name="history">
+                <!-- 头部操作栏 -->
+                <div class="tab-header" style="margin-bottom: 16px;">
+                  <div class="tab-header-left">
+                    <el-tag type="info" size="small">{{ deployLogs.length }} 条记录</el-tag>
+                  </div>
+                  <div class="tab-header-right">
+                    <el-button size="small" @click="loadDeployLogs(); loadDeployStats()" :loading="loadingLogs">
+                      <el-icon><Refresh /></el-icon>
+                      刷新
+                    </el-button>
+                  </div>
+                </div>
+
                 <!-- 统计信息 -->
                 <div class="stats-summary" v-if="deployStats">
                   <el-row :gutter="20">
@@ -520,6 +558,25 @@
               <el-tag v-if="projectForm.container_config.privileged" size="small" type="warning" class="config-tag">特权模式</el-tag>
             </div>
           </el-form-item>
+          <el-divider content-position="left">部署脚本（默认，可被版本覆盖）</el-divider>
+          <el-form-item label="部署前脚本">
+            <CodeEditor
+              :key="`container-project-pre-script-${projectDialogVisible}`"
+              v-model="projectForm.container_config.pre_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# 容器部署前执行的脚本（可选）"
+            />
+          </el-form-item>
+          <el-form-item label="部署后脚本">
+            <CodeEditor
+              :key="`container-project-post-script-${projectDialogVisible}`"
+              v-model="projectForm.container_config.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# 容器部署后执行的脚本（可选）"
+            />
+          </el-form-item>
         </template>
 
         <!-- Kubernetes 配置 -->
@@ -605,6 +662,26 @@
           <el-form-item label="Context" v-if="projectForm.k8s_config.kubeconfig">
             <el-input v-model="projectForm.k8s_config.kube_context" placeholder="留空使用当前 context" />
           </el-form-item>
+
+          <el-divider content-position="left">部署脚本（默认，可被版本覆盖）</el-divider>
+          <el-form-item label="部署前脚本">
+            <CodeEditor
+              :key="`k8s-project-pre-script-${projectDialogVisible}`"
+              v-model="projectForm.k8s_config.pre_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# K8s 部署前执行的脚本（可选）"
+            />
+          </el-form-item>
+          <el-form-item label="部署后脚本">
+            <CodeEditor
+              :key="`k8s-project-post-script-${projectDialogVisible}`"
+              v-model="projectForm.k8s_config.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# K8s 部署后执行的脚本（可选）"
+            />
+          </el-form-item>
         </template>
       </el-form>
       <template #footer>
@@ -646,7 +723,7 @@
           </el-form-item>
 
           <el-form-item v-if="gitVersionForm.version_type === 'tag'" label="选择 Tag">
-            <el-select v-model="gitVersionForm.selected_tag" placeholder="选择 Tag" style="width: 100%" filterable>
+            <el-select v-model="gitVersionForm.selected_tag" placeholder="选择 Tag" style="width: 100%" filterable @change="onTagSelected">
               <el-option v-for="tag in gitVersions.tags" :key="tag.name" :label="`${tag.name} - ${tag.message || tag.commit?.substring(0, 7)}`" :value="tag.name" />
             </el-select>
             <div class="form-tip" v-if="gitVersions.tags?.length === 0">暂无 Tag，请先获取版本</div>
@@ -696,6 +773,9 @@
 
           <el-form-item label="镜像地址" prop="container_image">
             <el-input v-model="versionForm.container_image" placeholder="nginx:1.25.0 或 registry.example.com/app:v1.0.0" />
+            <div class="form-tip" v-if="selectedProject?.container_config?.image">
+              项目默认镜像: {{ selectedProject.container_config.image }}
+            </div>
           </el-form-item>
 
           <el-form-item label="环境变量">
@@ -703,17 +783,45 @@
               v-model="versionForm.container_env"
               language="properties"
               height="120px"
-              placeholder="KEY1=value1&#10;KEY2=value2"
+              placeholder="KEY1=value1&#10;KEY2=value2&#10;（增量追加到项目配置）"
             />
           </el-form-item>
+
+          <el-divider content-position="left">资源限制（可选，覆盖项目默认值）</el-divider>
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="内存限制">
+                <el-input v-model="versionForm.deploy_config.resources.memory_limit" placeholder="512Mi" />
+                <div class="form-tip" v-if="selectedProject?.container_config?.memory_limit">
+                  项目默认: {{ selectedProject.container_config.memory_limit }}
+                </div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="CPU 限制">
+                <el-input v-model="versionForm.deploy_config.resources.cpu_limit" placeholder="500m" />
+                <div class="form-tip" v-if="selectedProject?.container_config?.cpu_limit">
+                  项目默认: {{ selectedProject.container_config.cpu_limit }}
+                </div>
+              </el-form-item>
+            </el-col>
+          </el-row>
 
           <el-divider content-position="left">部署脚本（可选）</el-divider>
           <el-form-item label="部署前脚本">
             <CodeEditor
-              v-model="versionForm.install_script"
+              v-model="versionForm.deploy_config.pre_script"
               language="shell"
               height="150px"
               placeholder="#!/bin/bash&#10;# 容器部署前执行的脚本（可选）"
+            />
+          </el-form-item>
+          <el-form-item label="部署后脚本">
+            <CodeEditor
+              v-model="versionForm.deploy_config.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# 容器部署后执行的脚本（可选）"
             />
           </el-form-item>
         </template>
@@ -730,32 +838,49 @@
           </el-form-item>
 
           <el-form-item label="副本数">
-            <el-input-number v-model="versionForm.replicas" :min="1" :max="100" />
-            <span class="form-tip ml-2">留空使用项目默认值</span>
+            <el-input-number v-model="versionForm.deploy_config.replicas" :min="1" :max="100" />
+            <span class="form-tip ml-2">
+              留空使用项目默认值
+              <template v-if="selectedProject?.k8s_config?.replicas">
+                ({{ selectedProject.k8s_config.replicas }})
+              </template>
+            </span>
           </el-form-item>
 
-          <el-divider content-position="left">资源限制（可选）</el-divider>
+          <el-divider content-position="left">资源限制（可选，覆盖项目默认值）</el-divider>
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="CPU Request">
-                <el-input v-model="versionForm.cpu_request" placeholder="100m" />
+                <el-input v-model="versionForm.deploy_config.resources.cpu_request" placeholder="100m" />
+                <div class="form-tip" v-if="selectedProject?.k8s_config?.cpu_request">
+                  项目默认: {{ selectedProject.k8s_config.cpu_request }}
+                </div>
               </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="CPU Limit">
-                <el-input v-model="versionForm.cpu_limit" placeholder="500m" />
+                <el-input v-model="versionForm.deploy_config.resources.cpu_limit" placeholder="500m" />
+                <div class="form-tip" v-if="selectedProject?.k8s_config?.cpu_limit">
+                  项目默认: {{ selectedProject.k8s_config.cpu_limit }}
+                </div>
               </el-form-item>
             </el-col>
           </el-row>
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="Memory Request">
-                <el-input v-model="versionForm.memory_request" placeholder="128Mi" />
+                <el-input v-model="versionForm.deploy_config.resources.memory_request" placeholder="128Mi" />
+                <div class="form-tip" v-if="selectedProject?.k8s_config?.memory_request">
+                  项目默认: {{ selectedProject.k8s_config.memory_request }}
+                </div>
               </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="Memory Limit">
-                <el-input v-model="versionForm.memory_limit" placeholder="512Mi" />
+                <el-input v-model="versionForm.deploy_config.resources.memory_limit" placeholder="512Mi" />
+                <div class="form-tip" v-if="selectedProject?.k8s_config?.memory_limit">
+                  项目默认: {{ selectedProject.k8s_config.memory_limit }}
+                </div>
               </el-form-item>
             </el-col>
           </el-row>
@@ -766,7 +891,7 @@
               v-model="versionForm.container_env"
               language="properties"
               height="120px"
-              placeholder="KEY1=value1&#10;KEY2=value2"
+              placeholder="KEY1=value1&#10;KEY2=value2&#10;（增量追加到项目配置）"
             />
           </el-form-item>
 
@@ -776,10 +901,28 @@
               可选择覆盖默认配置，或提供完整的 Kubernetes YAML 资源定义
             </div>
             <CodeEditor
-              v-model="versionForm.k8s_yaml"
+              v-model="versionForm.deploy_config.k8s_yaml_full"
               language="yaml"
               height="250px"
               placeholder="# Kubernetes Deployment YAML（可选覆盖）&#10;# 留空则使用项目配置自动生成"
+            />
+          </el-form-item>
+
+          <el-divider content-position="left">部署脚本（可选）</el-divider>
+          <el-form-item label="部署前脚本">
+            <CodeEditor
+              v-model="versionForm.deploy_config.pre_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# K8s 部署前执行的脚本（可选）"
+            />
+          </el-form-item>
+          <el-form-item label="部署后脚本">
+            <CodeEditor
+              v-model="versionForm.deploy_config.post_script"
+              language="shell"
+              height="150px"
+              placeholder="#!/bin/bash&#10;# K8s 部署后执行的脚本（可选）"
             />
           </el-form-item>
         </template>
@@ -927,20 +1070,36 @@
 
         <!-- Docker 容器特定配置 -->
         <template v-if="selectedProject?.type === 'container'">
-          <el-divider content-position="left">容器配置</el-divider>
+          <el-divider content-position="left">容器配置覆盖（临时覆盖，仅本次任务生效）</el-divider>
 
-          <el-form-item label="镜像版本" v-if="taskForm.operation !== 'uninstall'">
-            <el-input v-model="taskForm.container_image" :placeholder="selectedVersion?.container_image || selectedProject?.container_config?.image || 'nginx:latest'" />
-            <div class="form-tip">留空则使用版本默认镜像</div>
+          <el-form-item label="镜像覆盖" v-if="taskForm.operation !== 'uninstall'">
+            <el-input v-model="taskForm.override_config.image" :placeholder="selectedVersion?.container_image || selectedProject?.container_config?.image || 'nginx:latest'" />
+            <div class="form-tip">留空则使用版本配置的镜像（临时测试未发布的镜像时使用）</div>
           </el-form-item>
 
-          <el-form-item label="覆盖环境变量" v-if="taskForm.operation !== 'uninstall'">
+          <el-form-item label="追加环境变量" v-if="taskForm.operation !== 'uninstall'">
             <CodeEditor
               v-model="taskForm.container_env"
               language="properties"
               height="100px"
-              placeholder="KEY=value（每行一个，覆盖默认配置）"
+              placeholder="KEY=value（每行一个，追加到版本环境变量之上）"
             />
+          </el-form-item>
+
+          <el-form-item label="资源覆盖" v-if="taskForm.operation !== 'uninstall'">
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.memory_limit" placeholder="内存限制（如 512Mi）">
+                  <template #prepend>内存</template>
+                </el-input>
+              </el-col>
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.cpu_limit" placeholder="CPU 限制（如 500m）">
+                  <template #prepend>CPU</template>
+                </el-input>
+              </el-col>
+            </el-row>
+            <div class="form-tip">紧急扩容或金丝雀使用不同资源时填写</div>
           </el-form-item>
 
           <el-form-item label="拉取策略" v-if="taskForm.operation !== 'uninstall'">
@@ -954,16 +1113,53 @@
 
         <!-- Kubernetes 特定配置 -->
         <template v-if="selectedProject?.type === 'kubernetes'">
-          <el-divider content-position="left">Kubernetes 配置</el-divider>
+          <el-divider content-position="left">Kubernetes 配置覆盖（临时覆盖，仅本次任务生效）</el-divider>
 
-          <el-form-item label="镜像版本" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
-            <el-input v-model="taskForm.k8s_image" :placeholder="selectedVersion?.container_image || selectedProject?.k8s_config?.image || 'nginx:latest'" />
-            <div class="form-tip">留空则使用版本默认镜像</div>
+          <el-form-item label="镜像覆盖" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
+            <el-input v-model="taskForm.override_config.image" :placeholder="selectedVersion?.container_image || selectedProject?.k8s_config?.image || 'nginx:latest'" />
+            <div class="form-tip">留空则使用版本配置的镜像（临时测试未发布的镜像时使用）</div>
           </el-form-item>
 
-          <el-form-item label="副本数" v-if="taskForm.operation === 'install' || taskForm.operation === 'deploy'">
-            <el-input-number v-model="taskForm.k8s_replicas" :min="1" :max="100" />
-            <span class="form-tip ml-2">留空使用默认值</span>
+          <el-form-item label="副本数覆盖" v-if="taskForm.operation === 'install' || taskForm.operation === 'deploy'">
+            <el-input-number v-model="taskForm.override_config.replicas" :min="1" :max="100" />
+            <span class="form-tip ml-2">留空使用版本配置（紧急扩缩容时填写）</span>
+          </el-form-item>
+
+          <el-form-item label="资源覆盖" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
+            <el-row :gutter="20" class="mb-8">
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.cpu_request" placeholder="CPU Request（如 100m）">
+                  <template #prepend>CPU Req</template>
+                </el-input>
+              </el-col>
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.cpu_limit" placeholder="CPU Limit（如 500m）">
+                  <template #prepend>CPU Lim</template>
+                </el-input>
+              </el-col>
+            </el-row>
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.memory_request" placeholder="Memory Request（如 128Mi）">
+                  <template #prepend>Mem Req</template>
+                </el-input>
+              </el-col>
+              <el-col :span="12">
+                <el-input v-model="taskForm.override_config.resources.memory_limit" placeholder="Memory Limit（如 512Mi）">
+                  <template #prepend>Mem Lim</template>
+                </el-input>
+              </el-col>
+            </el-row>
+            <div class="form-tip">紧急扩容或金丝雀使用不同资源时填写</div>
+          </el-form-item>
+
+          <el-form-item label="追加环境变量" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
+            <CodeEditor
+              v-model="taskForm.container_env"
+              language="properties"
+              height="100px"
+              placeholder="KEY=value（每行一个，追加到版本环境变量之上）"
+            />
           </el-form-item>
 
           <el-form-item label="回滚到版本" v-if="taskForm.operation === 'rollback'">
@@ -1091,9 +1287,143 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="taskDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="createTask" :loading="submitting">创建任务</el-button>
+        <div class="task-dialog-footer">
+          <el-button
+            v-if="selectedProject?.type === 'container' || selectedProject?.type === 'kubernetes'"
+            @click="showConfigPreview"
+          >
+            <el-icon><View /></el-icon>
+            预览最终配置
+          </el-button>
+          <div class="footer-actions">
+            <el-button @click="taskDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="createTask" :loading="submitting">创建任务</el-button>
+          </div>
+        </div>
       </template>
+    </el-dialog>
+
+    <!-- 配置预览对话框 -->
+    <el-dialog v-model="configPreviewVisible" title="最终配置预览（三层合并结果）" width="70%" destroy-on-close>
+      <el-alert
+        type="info"
+        :closable="false"
+        class="mb-16"
+        title="配置合并规则：项目配置 → 版本配置 → 任务覆盖"
+        description="以下是三层配置合并后的最终结果。任务覆盖配置仅对本次部署生效。"
+      />
+
+      <el-tabs v-model="configPreviewTab">
+        <el-tab-pane label="基础配置" name="basic">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="镜像">
+              <el-tag type="primary">{{ mergedConfigPreview.image || '未配置' }}</el-tag>
+              <el-tag
+                v-if="configPreviewSource.image"
+                size="small"
+                :type="configPreviewSource.image === 'task' ? 'warning' : 'info'"
+                class="ml-2"
+              >
+                来自{{ configPreviewSource.image === 'task' ? '任务覆盖' : configPreviewSource.image === 'version' ? '版本' : '项目' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="容器名" v-if="selectedProject?.type === 'container'">
+              {{ mergedConfigPreview.containerName || '默认' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="副本数" v-if="selectedProject?.type === 'kubernetes'">
+              {{ mergedConfigPreview.replicas || 1 }}
+              <el-tag
+                v-if="configPreviewSource.replicas"
+                size="small"
+                :type="configPreviewSource.replicas === 'task' ? 'warning' : 'info'"
+                class="ml-2"
+              >
+                来自{{ configPreviewSource.replicas === 'task' ? '任务覆盖' : configPreviewSource.replicas === 'version' ? '版本' : '项目' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="重启策略" v-if="selectedProject?.type === 'container'">
+              {{ mergedConfigPreview.restartPolicy || 'unless-stopped' }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-tab-pane>
+
+        <el-tab-pane label="资源限制" name="resources">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="CPU Request" v-if="selectedProject?.type === 'kubernetes'">
+              {{ mergedConfigPreview.cpuRequest || '未限制' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="CPU Limit">
+              {{ mergedConfigPreview.cpuLimit || '未限制' }}
+              <el-tag
+                v-if="configPreviewSource.cpuLimit"
+                size="small"
+                :type="configPreviewSource.cpuLimit === 'task' ? 'warning' : 'info'"
+                class="ml-2"
+              >
+                来自{{ configPreviewSource.cpuLimit === 'task' ? '任务覆盖' : configPreviewSource.cpuLimit === 'version' ? '版本' : '项目' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="Memory Request" v-if="selectedProject?.type === 'kubernetes'">
+              {{ mergedConfigPreview.memoryRequest || '未限制' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Memory Limit">
+              {{ mergedConfigPreview.memoryLimit || '未限制' }}
+              <el-tag
+                v-if="configPreviewSource.memoryLimit"
+                size="small"
+                :type="configPreviewSource.memoryLimit === 'task' ? 'warning' : 'info'"
+                class="ml-2"
+              >
+                来自{{ configPreviewSource.memoryLimit === 'task' ? '任务覆盖' : configPreviewSource.memoryLimit === 'version' ? '版本' : '项目' }}
+              </el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-tab-pane>
+
+        <el-tab-pane label="环境变量" name="environment">
+          <div v-if="Object.keys(mergedConfigPreview.environment || {}).length > 0">
+            <el-table :data="environmentPreviewData" size="small" border>
+              <el-table-column prop="key" label="变量名" width="200" />
+              <el-table-column prop="value" label="值" />
+              <el-table-column prop="source" label="来源" width="100">
+                <template #default="{ row }">
+                  <el-tag
+                    size="small"
+                    :type="row.source === 'task' ? 'warning' : row.source === 'version' ? 'info' : ''"
+                  >
+                    {{ row.source === 'task' ? '任务' : row.source === 'version' ? '版本' : '项目' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <el-empty v-else description="未配置环境变量" :image-size="60" />
+        </el-tab-pane>
+
+        <el-tab-pane label="网络/存储" name="network" v-if="selectedProject?.type === 'container'">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="网络模式">
+              {{ selectedProject?.container_config?.network_mode || 'bridge' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="端口映射">
+              <template v-if="selectedProject?.container_config?.ports?.length">
+                <el-tag v-for="port in selectedProject.container_config.ports" :key="port.host + ':' + port.container" size="small" class="mr-2">
+                  {{ port.host }}:{{ port.container }}
+                </el-tag>
+              </template>
+              <span v-else>未配置</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="存储卷" :span="2">
+              <template v-if="selectedProject?.container_config?.volumes?.length">
+                <div v-for="vol in selectedProject.container_config.volumes" :key="vol.host" class="volume-item">
+                  {{ vol.host }} → {{ vol.container }} ({{ vol.mode || 'rw' }})
+                </div>
+              </template>
+              <span v-else>未配置</span>
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
 
     <!-- 任务详情抽屉 -->
@@ -1234,9 +1564,24 @@
               {{ formatDuration(row.duration) }}
             </template>
           </el-table-column>
-          <el-table-column prop="error" label="错误信息">
+          <el-table-column prop="error" label="错误信息" min-width="150">
             <template #default="{ row }">
               <span class="error-text">{{ row.error || '-' }}</span>
+            </template>
+          </el-table-column>
+          <!-- 容器日志操作 -->
+          <el-table-column v-if="(selectedTask.deploy_type || selectedProject?.type) === 'container'" label="操作" width="100" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                size="small"
+                type="primary"
+                link
+                @click="showContainerLogs(row)"
+                :disabled="!row.container_id && !selectedTask.container_name"
+              >
+                <el-icon><Document /></el-icon>
+                日志
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -1460,6 +1805,122 @@
       :initial-config="projectForm.container_config"
       @save="handleDockerConfigSave"
     />
+
+    <!-- 容器日志对话框 -->
+    <el-dialog
+      v-model="containerLogsDialogVisible"
+      title="容器日志"
+      width="80%"
+      destroy-on-close
+      @close="closeContainerLogs"
+    >
+      <div class="container-logs-header">
+        <div class="logs-info">
+          <el-tag type="info" size="small">{{ currentLogsClient }}</el-tag>
+          <el-tag type="success" size="small" class="ml-2">{{ currentLogsContainer }}</el-tag>
+        </div>
+        <div class="logs-actions">
+          <el-switch v-model="logsAutoScroll" active-text="自动滚动" />
+          <el-button size="small" @click="clearLogs">
+            <el-icon><Delete /></el-icon>
+            清空
+          </el-button>
+          <el-button
+            size="small"
+            :type="logsStreaming ? 'danger' : 'primary'"
+            @click="toggleLogsStream"
+          >
+            <el-icon><component :is="logsStreaming ? 'VideoPause' : 'VideoPlay'" /></el-icon>
+            {{ logsStreaming ? '停止' : '开始' }}
+          </el-button>
+        </div>
+      </div>
+      <div class="container-logs-content" ref="logsContainerRef">
+        <pre class="logs-pre" v-if="containerLogs">{{ containerLogs }}</pre>
+        <el-empty v-else description="暂无日志" :image-size="60" />
+      </div>
+      <div class="container-logs-footer" v-if="logsError">
+        <el-alert :title="logsError" type="error" :closable="false" show-icon />
+      </div>
+    </el-dialog>
+
+    <!-- 选择客户端查看日志对话框 -->
+    <el-dialog
+      v-model="selectClientForLogsVisible"
+      title="选择客户端查看日志"
+      width="500px"
+      destroy-on-close
+    >
+      <div class="select-client-list">
+        <div
+          v-for="client in logsTaskClients"
+          :key="client.client_id"
+          class="select-client-item"
+          @click="selectClientForLogs(client)"
+        >
+          <div class="client-info">
+            <span class="client-id">{{ client.client_id }}</span>
+            <el-tag
+              size="small"
+              :type="client.status === 'success' ? 'success' : client.status === 'failed' ? 'danger' : 'info'"
+            >
+              {{ getResultStatusLabel(client.status) }}
+            </el-tag>
+          </div>
+          <div class="client-container" v-if="client.container_id">
+            容器: {{ client.container_id.substring(0, 12) }}
+          </div>
+        </div>
+        <el-empty v-if="logsTaskClients.length === 0" description="暂无客户端" :image-size="60" />
+      </div>
+    </el-dialog>
+
+    <!-- 实时部署日志对话框 -->
+    <el-dialog
+      v-model="deployLogsDialogVisible"
+      title="实时部署日志"
+      width="80%"
+      destroy-on-close
+      @close="closeDeployLogs"
+    >
+      <div class="deploy-logs-header">
+        <div class="logs-info">
+          <el-tag type="info" size="small">{{ deployLogsTask?.version }}</el-tag>
+          <el-tag :type="getTaskStatusTag(deployLogsTask?.status)" size="small" class="ml-2">
+            {{ getTaskStatusLabel(deployLogsTask?.status) }}
+          </el-tag>
+          <span class="progress-mini ml-2" v-if="deployLogsTask">
+            成功: {{ deployLogsTask.success_count || 0 }} /
+            失败: {{ deployLogsTask.failed_count || 0 }} /
+            待执行: {{ deployLogsTask.pending_count || 0 }}
+          </span>
+        </div>
+        <div class="logs-actions">
+          <el-switch v-model="deployLogsAutoScroll" active-text="自动滚动" />
+          <el-button size="small" @click="clearDeployLogs">
+            <el-icon><Delete /></el-icon>
+            清空
+          </el-button>
+        </div>
+      </div>
+      <div class="deploy-logs-content" ref="deployLogsContainerRef">
+        <div
+          v-for="(log, index) in deployTaskLogs"
+          :key="index"
+          class="deploy-log-item"
+          :class="log.level"
+        >
+          <span class="log-time">{{ formatLogTime(log.timestamp) }}</span>
+          <el-tag :type="getLogLevelTag(log.level)" size="small" class="log-level">
+            {{ log.level.toUpperCase() }}
+          </el-tag>
+          <span class="log-client" v-if="log.client_id">[{{ log.client_id }}]</span>
+          <span class="log-stage" v-if="log.stage">[{{ log.stage }}]</span>
+          <span class="log-message">{{ log.message }}</span>
+        </div>
+        <el-empty v-if="deployTaskLogs.length === 0" description="暂无日志，任务开始后将显示实时日志" :image-size="60" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -1467,7 +1928,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion
+  Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion,
+  Document, VideoPlay, VideoPause, View
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -1525,7 +1987,34 @@ const taskDetailVisible = ref(false)
 const versionDetailVisible = ref(false)
 const logDetailVisible = ref(false)
 const dockerConfigDialogVisible = ref(false)
+const containerLogsDialogVisible = ref(false)
 const editingProject = ref(null)
+
+// 容器日志状态
+const containerLogs = ref('')
+const logsStreaming = ref(false)
+const logsAutoScroll = ref(true)
+const logsError = ref('')
+const currentLogsClient = ref('')
+const currentLogsContainer = ref('')
+const logsContainerRef = ref(null)
+const selectClientForLogsVisible = ref(false)
+const logsTaskClients = ref([])
+const currentLogsTask = ref(null)
+let logsStreamHandle = null
+
+// 实时部署日志状态
+const deployLogsDialogVisible = ref(false)
+const deployTaskLogs = ref([])
+const deployLogsStreaming = ref(false)
+const deployLogsAutoScroll = ref(true)
+const deployLogsTask = ref(null)
+const deployLogsContainerRef = ref(null)
+let deployLogsStreamHandle = null
+
+// 配置预览状态
+const configPreviewVisible = ref(false)
+const configPreviewTab = ref('basic')
 
 // ==================== 表单 ====================
 const projectFormRef = ref(null)
@@ -1553,7 +2042,9 @@ const projectForm = reactive({
   container_config: {
     image: '',
     container_name: '',
-    restart_policy: 'unless-stopped'
+    restart_policy: 'unless-stopped',
+    pre_script: '',
+    post_script: ''
   },
   // Kubernetes 配置
   k8s_config: {
@@ -1574,7 +2065,9 @@ const projectForm = reactive({
     rollout_timeout: 300,
     service_type: '',
     kubeconfig: '',
-    kube_context: ''
+    kube_context: '',
+    pre_script: '',
+    post_script: ''
   }
 })
 
@@ -1591,21 +2084,42 @@ const versionForm = reactive({
   update_script: '',
   rollback_script: '',
   uninstall_script: '',
-  // 容器/K8s 相关
+  // Git 相关
+  git_ref: '',       // tag/branch/commit 值
+  git_ref_type: '',  // tag/branch/commit 类型
+  // 向后兼容字段（将迁移到 deploy_config）
   container_image: '',
   container_env: '',
   replicas: 1,
   k8s_yaml: '',
-  // K8s 资源限制
-  cpu_request: '',
-  cpu_limit: '',
-  memory_request: '',
-  memory_limit: '',
-  // Git 相关
-  git_ref: '',       // tag/branch/commit 值
-  git_ref_type: '',  // tag/branch/commit 类型
-  pre_script: '',    // 部署前脚本（Git 类型用）
-  post_script: ''    // 部署后脚本（Git 类型用）
+  // 新版部署配置（三层配置架构）
+  deploy_config: {
+    // 镜像配置
+    image: '',
+    // 环境变量（增量合并到项目配置）
+    environment: {},
+    // 资源限制覆盖
+    resources: {
+      cpu_request: '',
+      cpu_limit: '',
+      memory_request: '',
+      memory_limit: ''
+    },
+    // K8s 副本数覆盖
+    replicas: null,
+    // 启动命令覆盖
+    command: [],
+    entrypoint: [],
+    working_dir: '',
+    // 健康检查覆盖
+    health_check: null,
+    // 部署脚本
+    pre_script: '',
+    post_script: '',
+    // K8s YAML 覆盖
+    k8s_yaml_patch: '',
+    k8s_yaml_full: ''
+  }
 })
 
 const versionRules = {
@@ -1624,20 +2138,36 @@ const taskForm = reactive({
   canary_auto_promote: false,
   failure_strategy: 'continue',
   auto_rollback: true,
-  // Docker 容器配置
+  // 向后兼容字段
   container_image: '',
   container_env: '',
   image_pull_policy: 'ifnotpresent',
-  // Kubernetes 配置
   k8s_image: '',
   k8s_replicas: null,
   k8s_revision: 0,
   k8s_timeout: 300,
-  // Git 配置
   git_ref: '',
   git_rollback_ref: '',
   run_post_script: true,
-  git_force: false
+  git_force: false,
+  // 新版任务覆盖配置（三层配置架构）
+  override_config: {
+    // 镜像覆盖（临时测试未发布的镜像）
+    image: '',
+    // 环境变量追加（追加到版本环境变量之上）
+    environment_add: {},
+    // 资源覆盖（紧急扩容或金丝雀使用不同资源）
+    resources: {
+      cpu_request: '',
+      cpu_limit: '',
+      memory_request: '',
+      memory_limit: ''
+    },
+    // 副本数覆盖（紧急扩缩容）
+    replicas: null,
+    // 启动命令覆盖（调试用）
+    command: []
+  }
 })
 
 const taskRules = {
@@ -1706,6 +2236,204 @@ const hasAdvancedDockerConfig = computed(() => {
          cfg.privileged ||
          cfg.networks?.length > 0 ||
          cfg.devices?.length > 0
+})
+
+// 配置预览 - 合并后的最终配置
+const mergedConfigPreview = computed(() => {
+  const project = selectedProject.value
+  const version = selectedVersion.value
+  const task = taskForm
+
+  if (!project) return {}
+
+  const result = {
+    image: '',
+    containerName: '',
+    replicas: 1,
+    restartPolicy: '',
+    cpuRequest: '',
+    cpuLimit: '',
+    memoryRequest: '',
+    memoryLimit: '',
+    environment: {}
+  }
+
+  if (project.type === 'container') {
+    // 项目级配置
+    result.image = project.container_config?.image || ''
+    result.containerName = project.container_config?.container_name || ''
+    result.restartPolicy = project.container_config?.restart_policy || 'unless-stopped'
+    result.cpuLimit = project.container_config?.cpu_limit || ''
+    result.memoryLimit = project.container_config?.memory_limit || ''
+    // 合并项目环境变量
+    if (project.container_config?.environment) {
+      Object.assign(result.environment, project.container_config.environment)
+    }
+
+    // 版本级覆盖
+    if (version?.container_image) result.image = version.container_image
+    if (version?.deploy_config?.resources?.cpu_limit) result.cpuLimit = version.deploy_config.resources.cpu_limit
+    if (version?.deploy_config?.resources?.memory_limit) result.memoryLimit = version.deploy_config.resources.memory_limit
+
+    // 任务级覆盖
+    if (task.override_config?.image) result.image = task.override_config.image
+    if (task.override_config?.resources?.cpu_limit) result.cpuLimit = task.override_config.resources.cpu_limit
+    if (task.override_config?.resources?.memory_limit) result.memoryLimit = task.override_config.resources.memory_limit
+  } else if (project.type === 'kubernetes') {
+    // 项目级配置
+    result.image = project.k8s_config?.image || ''
+    result.replicas = project.k8s_config?.replicas || 1
+    result.cpuRequest = project.k8s_config?.cpu_request || ''
+    result.cpuLimit = project.k8s_config?.cpu_limit || ''
+    result.memoryRequest = project.k8s_config?.memory_request || ''
+    result.memoryLimit = project.k8s_config?.memory_limit || ''
+    // 合并项目环境变量
+    if (project.k8s_config?.environment) {
+      Object.assign(result.environment, project.k8s_config.environment)
+    }
+
+    // 版本级覆盖
+    if (version?.container_image) result.image = version.container_image
+    if (version?.deploy_config?.replicas) result.replicas = version.deploy_config.replicas
+    if (version?.deploy_config?.resources?.cpu_request) result.cpuRequest = version.deploy_config.resources.cpu_request
+    if (version?.deploy_config?.resources?.cpu_limit) result.cpuLimit = version.deploy_config.resources.cpu_limit
+    if (version?.deploy_config?.resources?.memory_request) result.memoryRequest = version.deploy_config.resources.memory_request
+    if (version?.deploy_config?.resources?.memory_limit) result.memoryLimit = version.deploy_config.resources.memory_limit
+
+    // 任务级覆盖
+    if (task.override_config?.image) result.image = task.override_config.image
+    if (task.override_config?.replicas) result.replicas = task.override_config.replicas
+    if (task.override_config?.resources?.cpu_request) result.cpuRequest = task.override_config.resources.cpu_request
+    if (task.override_config?.resources?.cpu_limit) result.cpuLimit = task.override_config.resources.cpu_limit
+    if (task.override_config?.resources?.memory_request) result.memoryRequest = task.override_config.resources.memory_request
+    if (task.override_config?.resources?.memory_limit) result.memoryLimit = task.override_config.resources.memory_limit
+  }
+
+  // 合并版本环境变量
+  if (version?.container_env) {
+    version.container_env.split('\n').forEach(line => {
+      const idx = line.indexOf('=')
+      if (idx > 0) {
+        result.environment[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+      }
+    })
+  }
+
+  // 合并任务环境变量
+  if (task.container_env) {
+    task.container_env.split('\n').forEach(line => {
+      const idx = line.indexOf('=')
+      if (idx > 0) {
+        result.environment[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+      }
+    })
+  }
+
+  return result
+})
+
+// 配置来源追踪
+const configPreviewSource = computed(() => {
+  const project = selectedProject.value
+  const version = selectedVersion.value
+  const task = taskForm
+
+  const source = {}
+
+  if (!project) return source
+
+  // 镜像来源
+  if (task.override_config?.image) {
+    source.image = 'task'
+  } else if (version?.container_image) {
+    source.image = 'version'
+  } else {
+    source.image = 'project'
+  }
+
+  // 副本数来源 (K8s)
+  if (project.type === 'kubernetes') {
+    if (task.override_config?.replicas) {
+      source.replicas = 'task'
+    } else if (version?.deploy_config?.replicas) {
+      source.replicas = 'version'
+    } else {
+      source.replicas = 'project'
+    }
+  }
+
+  // CPU Limit 来源
+  if (task.override_config?.resources?.cpu_limit) {
+    source.cpuLimit = 'task'
+  } else if (version?.deploy_config?.resources?.cpu_limit) {
+    source.cpuLimit = 'version'
+  } else if (project.container_config?.cpu_limit || project.k8s_config?.cpu_limit) {
+    source.cpuLimit = 'project'
+  }
+
+  // Memory Limit 来源
+  if (task.override_config?.resources?.memory_limit) {
+    source.memoryLimit = 'task'
+  } else if (version?.deploy_config?.resources?.memory_limit) {
+    source.memoryLimit = 'version'
+  } else if (project.container_config?.memory_limit || project.k8s_config?.memory_limit) {
+    source.memoryLimit = 'project'
+  }
+
+  return source
+})
+
+// 环境变量预览数据（带来源标记）
+const environmentPreviewData = computed(() => {
+  const project = selectedProject.value
+  const version = selectedVersion.value
+  const task = taskForm
+
+  const result = []
+  const envSources = {}
+
+  if (!project) return result
+
+  // 收集项目环境变量
+  const projectEnv = project.type === 'container'
+    ? project.container_config?.environment
+    : project.k8s_config?.environment
+  if (projectEnv) {
+    for (const [key, value] of Object.entries(projectEnv)) {
+      envSources[key] = { value, source: 'project' }
+    }
+  }
+
+  // 收集版本环境变量
+  if (version?.container_env) {
+    version.container_env.split('\n').forEach(line => {
+      const idx = line.indexOf('=')
+      if (idx > 0) {
+        const key = line.substring(0, idx).trim()
+        const value = line.substring(idx + 1).trim()
+        envSources[key] = { value, source: 'version' }
+      }
+    })
+  }
+
+  // 收集任务环境变量
+  if (task.container_env) {
+    task.container_env.split('\n').forEach(line => {
+      const idx = line.indexOf('=')
+      if (idx > 0) {
+        const key = line.substring(0, idx).trim()
+        const value = line.substring(idx + 1).trim()
+        envSources[key] = { value, source: 'task' }
+      }
+    })
+  }
+
+  // 转换为数组
+  for (const [key, data] of Object.entries(envSources)) {
+    result.push({ key, value: data.value, source: data.source })
+  }
+
+  return result.sort((a, b) => a.key.localeCompare(b.key))
 })
 
 // ==================== 数据加载 ====================
@@ -1852,7 +2580,9 @@ function showCreateProject() {
   projectForm.container_config = {
     image: '',
     container_name: '',
-    restart_policy: 'unless-stopped'
+    restart_policy: 'unless-stopped',
+    pre_script: '',
+    post_script: ''
   }
   // 重置 K8s 配置
   projectForm.k8s_config = {
@@ -1873,7 +2603,9 @@ function showCreateProject() {
     rollout_timeout: 300,
     service_type: '',
     kubeconfig: '',
-    kube_context: ''
+    kube_context: '',
+    pre_script: '',
+    post_script: ''
   }
   projectDialogVisible.value = true
 }
@@ -2011,6 +2743,17 @@ async function fetchGitVersions() {
       gitVersions.current_branch = res.current_branch || ''
       gitVersions.default_branch = res.default_branch || ''
       ElMessage.success(`获取成功: ${gitVersions.tags.length} 个 Tag, ${gitVersions.branches.length} 个分支`)
+
+      // 自动选择第一个 tag 并填充版本信息
+      if (gitVersions.tags.length > 0) {
+        const firstTag = gitVersions.tags[0]
+        gitVersionForm.version_type = 'tag'
+        gitVersionForm.selected_tag = firstTag.name
+        // 将 tag 名称填充到版本号
+        versionForm.version = firstTag.name
+        // 将 tag 的提交信息填充到版本说明
+        versionForm.description = firstTag.message || `${firstTag.name} - ${firstTag.commit?.substring(0, 7) || ''}`
+      }
     } else {
       ElMessage.error(res.error || '获取 Git 版本失败')
     }
@@ -2018,6 +2761,15 @@ async function fetchGitVersions() {
     ElMessage.error(e.message || '获取 Git 版本失败')
   } finally {
     loadingGitVersions.value = false
+  }
+}
+
+// 当选择 tag 时自动填充版本号和说明
+function onTagSelected(tagName) {
+  const tag = gitVersions.tags.find(t => t.name === tagName)
+  if (tag) {
+    versionForm.version = tag.name
+    versionForm.description = tag.message || `${tag.name} - ${tag.commit?.substring(0, 7) || ''}`
   }
 }
 
@@ -2045,7 +2797,91 @@ async function saveVersion() {
 
   submitting.value = true
   try {
-    const res = await api.createVersion(selectedProject.value.id, versionForm)
+    // 构建请求数据
+    const requestData = {
+      version: versionForm.version,
+      description: versionForm.description,
+      work_dir: versionForm.work_dir,
+      install_script: versionForm.install_script,
+      update_script: versionForm.update_script,
+      rollback_script: versionForm.rollback_script,
+      uninstall_script: versionForm.uninstall_script,
+      git_ref: versionForm.git_ref,
+      git_ref_type: versionForm.git_ref_type,
+      // 向后兼容：同时发送旧字段
+      container_image: versionForm.container_image || versionForm.deploy_config.image,
+      container_env: versionForm.container_env,
+      replicas: versionForm.replicas,
+      k8s_yaml: versionForm.k8s_yaml || versionForm.deploy_config.k8s_yaml_full
+    }
+
+    // 构建新版 deploy_config（仅当有值时才发送）
+    const projectType = selectedProject.value?.type
+    if (projectType === 'container' || projectType === 'kubernetes') {
+      const deployConfig = {}
+
+      // 镜像
+      const image = versionForm.deploy_config.image || versionForm.container_image
+      if (image) deployConfig.image = image
+
+      // 环境变量（从文本格式转换为 map）
+      const envText = versionForm.container_env
+      if (envText) {
+        const envMap = {}
+        envText.split('\n').forEach(line => {
+          const idx = line.indexOf('=')
+          if (idx > 0) {
+            envMap[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+          }
+        })
+        if (Object.keys(envMap).length > 0) {
+          deployConfig.environment = envMap
+        }
+      }
+
+      // 资源限制
+      const resources = versionForm.deploy_config.resources
+      if (resources.cpu_request || resources.cpu_limit || resources.memory_request || resources.memory_limit) {
+        deployConfig.resources = {
+          cpu_request: resources.cpu_request || undefined,
+          cpu_limit: resources.cpu_limit || undefined,
+          memory_request: resources.memory_request || undefined,
+          memory_limit: resources.memory_limit || undefined
+        }
+      }
+
+      // K8s 副本数
+      if (projectType === 'kubernetes' && versionForm.replicas > 0) {
+        deployConfig.replicas = versionForm.replicas
+      }
+
+      // 工作目录
+      if (versionForm.deploy_config.working_dir) {
+        deployConfig.working_dir = versionForm.deploy_config.working_dir
+      }
+
+      // 部署脚本
+      if (versionForm.deploy_config.pre_script) {
+        deployConfig.pre_script = versionForm.deploy_config.pre_script
+      }
+      if (versionForm.deploy_config.post_script) {
+        deployConfig.post_script = versionForm.deploy_config.post_script
+      }
+
+      // K8s YAML
+      if (projectType === 'kubernetes') {
+        if (versionForm.deploy_config.k8s_yaml_full || versionForm.k8s_yaml) {
+          deployConfig.k8s_yaml_full = versionForm.deploy_config.k8s_yaml_full || versionForm.k8s_yaml
+        }
+      }
+
+      // 只有当有配置时才添加 deploy_config
+      if (Object.keys(deployConfig).length > 0) {
+        requestData.deploy_config = deployConfig
+      }
+    }
+
+    const res = await api.createVersion(selectedProject.value.id, requestData)
     if (res.success) {
       ElMessage.success('版本创建成功')
       versionDialogVisible.value = false
@@ -2111,6 +2947,19 @@ function showCreateTask(version) {
   taskForm.git_rollback_ref = ''
   taskForm.run_post_script = true
   taskForm.git_force = false
+  // 重置 override_config（新版三层配置）
+  taskForm.override_config = {
+    image: '',
+    environment_add: {},
+    resources: {
+      cpu_request: '',
+      cpu_limit: '',
+      memory_request: '',
+      memory_limit: ''
+    },
+    replicas: null,
+    command: []
+  }
 
   taskDialogVisible.value = true
 }
@@ -2131,10 +2980,88 @@ async function createTask() {
 
   submitting.value = true
   try {
+    const projectType = selectedProject.value?.type
+
+    // 构建基础任务数据
     const taskData = {
       project_id: selectedProject.value.id,
       version_id: selectedVersion.value.id,
-      ...taskForm
+      operation: taskForm.operation,
+      client_ids: taskForm.client_ids,
+      schedule_type: taskForm.schedule_type,
+      schedule_from: taskForm.schedule_time?.[0],
+      schedule_to: taskForm.schedule_time?.[1],
+      canary_enabled: taskForm.canary_enabled,
+      canary_percent: taskForm.canary_percent,
+      canary_duration: taskForm.canary_duration,
+      canary_auto_promote: taskForm.canary_auto_promote,
+      failure_strategy: taskForm.failure_strategy,
+      auto_rollback: taskForm.auto_rollback
+    }
+
+    // 向后兼容：添加旧字段
+    if (projectType === 'container') {
+      taskData.container_image = taskForm.container_image || taskForm.override_config.image
+      taskData.container_env = taskForm.container_env
+      taskData.image_pull_policy = taskForm.image_pull_policy
+    } else if (projectType === 'kubernetes') {
+      taskData.k8s_image = taskForm.k8s_image || taskForm.override_config.image
+      taskData.k8s_replicas = taskForm.k8s_replicas || taskForm.override_config.replicas
+      taskData.k8s_revision = taskForm.k8s_revision
+      taskData.k8s_timeout = taskForm.k8s_timeout
+    } else if (projectType === 'gitpull') {
+      taskData.git_ref = taskForm.git_ref
+      taskData.git_rollback_ref = taskForm.git_rollback_ref
+      taskData.run_post_script = taskForm.run_post_script
+      taskData.git_force = taskForm.git_force
+    }
+
+    // 构建新版 override_config（三层配置架构）
+    if (projectType === 'container' || projectType === 'kubernetes') {
+      const overrideConfig = {}
+
+      // 镜像覆盖
+      const image = taskForm.override_config.image ||
+                    (projectType === 'container' ? taskForm.container_image : taskForm.k8s_image)
+      if (image) overrideConfig.image = image
+
+      // 环境变量追加（从文本格式转换）
+      const envText = taskForm.container_env
+      if (envText) {
+        const envMap = {}
+        envText.split('\n').forEach(line => {
+          const idx = line.indexOf('=')
+          if (idx > 0) {
+            envMap[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+          }
+        })
+        if (Object.keys(envMap).length > 0) {
+          overrideConfig.environment_add = envMap
+        }
+      }
+
+      // 资源覆盖
+      const resources = taskForm.override_config.resources
+      if (resources.cpu_request || resources.cpu_limit || resources.memory_request || resources.memory_limit) {
+        overrideConfig.resources = {
+          cpu_request: resources.cpu_request || undefined,
+          cpu_limit: resources.cpu_limit || undefined,
+          memory_request: resources.memory_request || undefined,
+          memory_limit: resources.memory_limit || undefined
+        }
+      }
+
+      // 副本数覆盖
+      const replicas = taskForm.override_config.replicas ||
+                       (projectType === 'kubernetes' ? taskForm.k8s_replicas : null)
+      if (replicas && replicas > 0) {
+        overrideConfig.replicas = replicas
+      }
+
+      // 只有当有配置时才添加 override_config
+      if (Object.keys(overrideConfig).length > 0) {
+        taskData.override_config = overrideConfig
+      }
     }
 
     const res = await api.createDeployTask(taskData)
@@ -2232,6 +3159,258 @@ function viewTask(task) {
 function viewLog(log) {
   selectedLog.value = log
   logDetailVisible.value = true
+}
+
+// ==================== 容器日志 ====================
+
+// 从任务列表打开日志选择对话框
+function showTaskLogsDialog(task) {
+  currentLogsTask.value = task
+
+  // 获取任务的客户端列表
+  const clients = task.results || []
+  if (clients.length === 0) {
+    // 如果任务还没有执行结果，使用任务的 client_ids
+    const clientIds = task.client_ids || []
+    logsTaskClients.value = clientIds.map(id => ({
+      client_id: id,
+      status: 'pending',
+      container_id: ''
+    }))
+  } else {
+    logsTaskClients.value = clients
+  }
+
+  // 如果只有一个客户端，直接打开日志
+  if (logsTaskClients.value.length === 1) {
+    selectClientForLogs(logsTaskClients.value[0])
+    return
+  }
+
+  // 显示客户端选择对话框
+  selectClientForLogsVisible.value = true
+}
+
+// 选择客户端查看日志
+function selectClientForLogs(client) {
+  selectClientForLogsVisible.value = false
+
+  const containerId = client.container_id || ''
+  const containerName = currentLogsTask.value?.container_name || selectedProject.value?.container_config?.container_name || ''
+
+  if (!containerId && !containerName) {
+    ElMessage.warning('无法获取容器标识')
+    return
+  }
+
+  currentLogsClient.value = client.client_id
+  currentLogsContainer.value = containerId ? containerId.substring(0, 12) : containerName
+  containerLogs.value = ''
+  logsError.value = ''
+  logsStreaming.value = false
+  containerLogsDialogVisible.value = true
+
+  // 自动开始流式获取
+  startLogsStream(client.client_id, containerId, containerName)
+}
+
+function showContainerLogs(row) {
+  // 确定容器标识
+  const containerId = row.container_id || ''
+  const containerName = selectedTask.value?.container_name || selectedProject.value?.container_config?.container_name || ''
+
+  if (!containerId && !containerName) {
+    ElMessage.warning('无法获取容器标识')
+    return
+  }
+
+  currentLogsClient.value = row.client_id
+  currentLogsContainer.value = containerId ? containerId.substring(0, 12) : containerName
+  containerLogs.value = ''
+  logsError.value = ''
+  logsStreaming.value = false
+  containerLogsDialogVisible.value = true
+
+  // 自动开始流式获取
+  startLogsStream(row.client_id, containerId, containerName)
+}
+
+function startLogsStream(clientId, containerId, containerName) {
+  if (logsStreamHandle) {
+    logsStreamHandle.close()
+    logsStreamHandle = null
+  }
+
+  logsStreaming.value = true
+  logsError.value = ''
+
+  logsStreamHandle = api.streamContainerLogs(
+    {
+      client_id: clientId,
+      container_id: containerId,
+      container_name: containerName,
+      tail: 200,
+      timestamps: true
+    },
+    // onLogs
+    (event) => {
+      if (event.logs) {
+        containerLogs.value = event.logs
+        // 自动滚动到底部
+        if (logsAutoScroll.value && logsContainerRef.value) {
+          setTimeout(() => {
+            logsContainerRef.value.scrollTop = logsContainerRef.value.scrollHeight
+          }, 50)
+        }
+      }
+    },
+    // onStart
+    (event) => {
+      console.log('Container logs stream started', event)
+    },
+    // onError
+    (event) => {
+      logsError.value = event.error || '获取日志失败'
+      logsStreaming.value = false
+    }
+  )
+}
+
+function stopLogsStream() {
+  if (logsStreamHandle) {
+    logsStreamHandle.close()
+    logsStreamHandle = null
+  }
+  logsStreaming.value = false
+}
+
+function toggleLogsStream() {
+  if (logsStreaming.value) {
+    stopLogsStream()
+  } else {
+    // 重新开始
+    const containerId = selectedTask.value?.results?.find(r => r.client_id === currentLogsClient.value)?.container_id || ''
+    const containerName = selectedTask.value?.container_name || selectedProject.value?.container_config?.container_name || ''
+    startLogsStream(currentLogsClient.value, containerId, containerName)
+  }
+}
+
+function clearLogs() {
+  containerLogs.value = ''
+}
+
+function closeContainerLogs() {
+  stopLogsStream()
+  containerLogs.value = ''
+  logsError.value = ''
+}
+
+// ==================== 配置预览 ====================
+
+function showConfigPreview() {
+  configPreviewTab.value = 'basic'
+  configPreviewVisible.value = true
+}
+
+// ==================== 实时部署日志 ====================
+
+function showDeployLogs(task) {
+  deployLogsTask.value = task
+  deployTaskLogs.value = []
+  deployLogsDialogVisible.value = true
+
+  // 如果任务还在运行，开始 SSE 流
+  if (task.status === 'running' || task.status === 'canary' || task.status === 'pending') {
+    startDeployLogsStream(task.id)
+  } else {
+    // 任务已完成，获取历史日志
+    loadDeployTaskLogs(task.id)
+  }
+}
+
+function startDeployLogsStream(taskId) {
+  if (deployLogsStreamHandle) {
+    deployLogsStreamHandle.close()
+    deployLogsStreamHandle = null
+  }
+
+  deployLogsStreaming.value = true
+
+  deployLogsStreamHandle = api.streamDeployTaskLogs(
+    taskId,
+    {},
+    // onLog
+    (log) => {
+      deployTaskLogs.value.push(log)
+      // 自动滚动到底部
+      if (deployLogsAutoScroll.value && deployLogsContainerRef.value) {
+        setTimeout(() => {
+          deployLogsContainerRef.value.scrollTop = deployLogsContainerRef.value.scrollHeight
+        }, 50)
+      }
+    },
+    // onStatus
+    (status) => {
+      if (deployLogsTask.value) {
+        deployLogsTask.value.status = status.task_status
+        deployLogsTask.value.success_count = status.success_count
+        deployLogsTask.value.failed_count = status.failed_count
+        deployLogsTask.value.pending_count = status.pending_count
+      }
+    },
+    // onDone
+    (data) => {
+      deployLogsStreaming.value = false
+      if (deployLogsTask.value) {
+        deployLogsTask.value.status = data.task_status
+      }
+    },
+    // onError
+    (error) => {
+      console.error('Deploy logs stream error:', error)
+      deployLogsStreaming.value = false
+    }
+  )
+}
+
+async function loadDeployTaskLogs(taskId) {
+  try {
+    const res = await api.getDeployTaskLogs(taskId)
+    if (res.success) {
+      deployTaskLogs.value = res.logs || []
+    }
+  } catch (e) {
+    console.error('Failed to load deploy task logs:', e)
+  }
+}
+
+function clearDeployLogs() {
+  deployTaskLogs.value = []
+}
+
+function closeDeployLogs() {
+  if (deployLogsStreamHandle) {
+    deployLogsStreamHandle.close()
+    deployLogsStreamHandle = null
+  }
+  deployLogsStreaming.value = false
+  deployTaskLogs.value = []
+}
+
+function formatLogTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function getLogLevelTag(level) {
+  switch (level) {
+    case 'error': return 'danger'
+    case 'warn': return 'warning'
+    case 'info': return 'info'
+    case 'debug': return ''
+    default: return 'info'
+  }
 }
 
 // ==================== 工具函数 ====================
@@ -3067,5 +4246,239 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 600;
   color: var(--tech-text-primary);
+}
+
+/* 容器日志对话框样式 */
+.container-logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--tech-border);
+}
+
+.logs-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logs-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.container-logs-content {
+  height: 500px;
+  overflow-y: auto;
+  background: #1e1e1e;
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  padding: 0;
+}
+
+.logs-pre {
+  margin: 0;
+  padding: 16px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.container-logs-footer {
+  margin-top: 12px;
+}
+
+.container-logs-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.container-logs-content::-webkit-scrollbar-track {
+  background: #2d2d2d;
+}
+
+.container-logs-content::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.container-logs-content::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* 实时部署日志对话框样式 */
+.deploy-logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--tech-border);
+}
+
+.progress-mini {
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  font-family: var(--tech-font-mono);
+}
+
+.deploy-logs-content {
+  height: 500px;
+  overflow-y: auto;
+  background: #1e1e1e;
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  padding: 12px 16px;
+}
+
+.deploy-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d4d4d4;
+}
+
+.deploy-log-item.error {
+  color: #f56c6c;
+}
+
+.deploy-log-item.warn {
+  color: #e6a23c;
+}
+
+.deploy-log-item.info {
+  color: #67c23a;
+}
+
+.deploy-log-item.debug {
+  color: #909399;
+}
+
+.deploy-log-item .log-time {
+  color: #6a9955;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.deploy-log-item .log-level {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.deploy-log-item .log-client {
+  color: #4fc1ff;
+  flex-shrink: 0;
+}
+
+.deploy-log-item .log-stage {
+  color: #c586c0;
+  flex-shrink: 0;
+}
+
+.deploy-log-item .log-message {
+  flex: 1;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.deploy-logs-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.deploy-logs-content::-webkit-scrollbar-track {
+  background: #2d2d2d;
+}
+
+.deploy-logs-content::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.deploy-logs-content::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* 客户端选择列表样式 */
+.select-client-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.select-client-item {
+  padding: 12px 16px;
+  border: 1px solid var(--tech-border);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.select-client-item:hover {
+  background-color: var(--tech-bg-tertiary);
+  border-color: var(--tech-primary);
+}
+
+.select-client-item:last-child {
+  margin-bottom: 0;
+}
+
+.select-client-item .client-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.select-client-item .client-id {
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.select-client-item .client-container {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  font-family: var(--tech-font-mono);
+}
+
+/* 任务对话框底部样式 */
+.task-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.task-dialog-footer .footer-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* 配置预览样式 */
+.mb-16 {
+  margin-bottom: 16px;
+}
+
+.mr-2 {
+  margin-right: 8px;
+}
+
+.volume-item {
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--tech-text-secondary);
+  font-family: var(--tech-font-mono);
+}
+
+.volume-item + .volume-item {
+  border-top: 1px dashed var(--tech-border);
 }
 </style>

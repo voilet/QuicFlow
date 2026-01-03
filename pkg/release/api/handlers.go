@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -117,6 +119,11 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 		release.POST("/tasks/:id/promote", api.PromoteDeployTask)
 		release.POST("/tasks/:id/rollback", api.RollbackDeployTask)
 
+		// 部署任务日志（实时日志和容器日志）
+		release.GET("/tasks/:id/logs", api.GetDeployTaskLogs)
+		release.GET("/tasks/:id/logs/stream", api.StreamDeployTaskLogs)
+		release.GET("/tasks/:id/clients/:client_id/container-logs", api.GetClientContainerLogs)
+
 		// 发布管理
 		release.POST("/deploys", api.CreateRelease)
 		release.GET("/deploys", api.ListReleases)
@@ -160,6 +167,9 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 
 		// Git 版本查询
 		release.POST("/git-versions", api.GetGitVersions)
+
+		// 配置预览（显示合并后的最终配置）
+		release.POST("/config-preview", api.PreviewDeployConfig)
 	}
 }
 
@@ -960,11 +970,13 @@ func (api *ReleaseAPI) CreateVersion(c *gin.Context) {
 		// Git 相关
 		GitRef     string `json:"git_ref"`
 		GitRefType string `json:"git_ref_type"`
-		// 容器/K8s 相关
+		// 容器/K8s 相关（向后兼容）
 		ContainerImage string `json:"container_image"`
 		ContainerEnv   string `json:"container_env"`
 		Replicas       int    `json:"replicas"`
 		K8sYAML        string `json:"k8s_yaml"`
+		// 新版部署配置（推荐使用）
+		DeployConfig *models.VersionDeployConfig `json:"deploy_config"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -998,9 +1010,28 @@ func (api *ReleaseAPI) CreateVersion(c *gin.Context) {
 		}
 	}
 
+	// 确定工作目录：优先使用请求中的值，否则从项目配置继承
 	workDir := req.WorkDir
 	if workDir == "" {
-		workDir = "/opt/app"
+		// 根据项目类型从配置中继承
+		switch project.Type {
+		case models.DeployTypeGitPull:
+			if project.GitPullConfig != nil && project.GitPullConfig.WorkDir != "" {
+				workDir = project.GitPullConfig.WorkDir
+			}
+		case models.DeployTypeScript:
+			if project.ScriptConfig != nil && project.ScriptConfig.WorkDir != "" {
+				workDir = project.ScriptConfig.WorkDir
+			}
+		case models.DeployTypeContainer:
+			if project.ContainerConfig != nil && project.ContainerConfig.WorkingDir != "" {
+				workDir = project.ContainerConfig.WorkingDir
+			}
+		}
+		// 如果仍为空，使用默认值
+		if workDir == "" {
+			workDir = "/opt/app"
+		}
 	}
 
 	replicas := req.Replicas
@@ -1023,6 +1054,7 @@ func (api *ReleaseAPI) CreateVersion(c *gin.Context) {
 		ContainerEnv:    req.ContainerEnv,
 		Replicas:        replicas,
 		K8sYAML:         req.K8sYAML,
+		DeployConfig:    req.DeployConfig,
 		Status:          "draft",
 	}
 
@@ -1077,13 +1109,20 @@ func (api *ReleaseAPI) UpdateVersion(c *gin.Context) {
 	}
 
 	var req struct {
-		Description     string `json:"description"`
-		WorkDir         string `json:"work_dir"`
-		InstallScript   string `json:"install_script"`
-		UpdateScript    string `json:"update_script"`
-		RollbackScript  string `json:"rollback_script"`
-		UninstallScript string `json:"uninstall_script"`
-		Status          string `json:"status"`
+		Description     string                      `json:"description"`
+		WorkDir         string                      `json:"work_dir"`
+		InstallScript   string                      `json:"install_script"`
+		UpdateScript    string                      `json:"update_script"`
+		RollbackScript  string                      `json:"rollback_script"`
+		UninstallScript string                      `json:"uninstall_script"`
+		Status          string                      `json:"status"`
+		// 容器/K8s 相关（向后兼容）
+		ContainerImage  string                      `json:"container_image"`
+		ContainerEnv    string                      `json:"container_env"`
+		Replicas        *int                        `json:"replicas"`
+		K8sYAML         string                      `json:"k8s_yaml"`
+		// 新版部署配置
+		DeployConfig    *models.VersionDeployConfig `json:"deploy_config"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1111,6 +1150,23 @@ func (api *ReleaseAPI) UpdateVersion(c *gin.Context) {
 	}
 	if req.Status != "" {
 		version.Status = req.Status
+	}
+	// 容器/K8s 相关字段更新
+	if req.ContainerImage != "" {
+		version.ContainerImage = req.ContainerImage
+	}
+	if req.ContainerEnv != "" {
+		version.ContainerEnv = req.ContainerEnv
+	}
+	if req.Replicas != nil {
+		version.Replicas = *req.Replicas
+	}
+	if req.K8sYAML != "" {
+		version.K8sYAML = req.K8sYAML
+	}
+	// 新版部署配置更新
+	if req.DeployConfig != nil {
+		version.DeployConfig = req.DeployConfig
 	}
 
 	if err := api.db.Save(&version).Error; err != nil {
@@ -1159,6 +1215,8 @@ func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
 		CanaryAutoPromote bool       `json:"canary_auto_promote"`
 		FailureStrategy   string     `json:"failure_strategy"`
 		AutoRollback      bool       `json:"auto_rollback"`
+		// 任务覆盖配置（用于金丝雀、A/B测试、紧急扩容等场景）
+		OverrideConfig *models.TaskOverrideConfig `json:"override_config"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1258,6 +1316,7 @@ func (api *ReleaseAPI) CreateDeployTask(c *gin.Context) {
 		CanaryAutoPromote:   req.CanaryAutoPromote,
 		FailureStrategy:     failureStrategy,
 		AutoRollback:        req.AutoRollback,
+		OverrideConfig:      req.OverrideConfig,
 		Status:              "pending",
 		TotalCount:          len(clientIDs),
 		PendingCount:        len(clientIDs),
@@ -1490,18 +1549,14 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 		return
 	}
 
-	// 根据操作类型选择脚本
-	var script string
-	switch task.Operation {
-	case models.OperationTypeInstall:
-		script = version.InstallScript
-	case models.OperationTypeUpdate:
-		script = version.UpdateScript
-	case models.OperationTypeRollback:
-		script = version.RollbackScript
-	case models.OperationTypeUninstall:
-		script = version.UninstallScript
+	// 获取项目信息
+	var project models.Project
+	if err := api.db.First(&project, "id = ?", task.ProjectID).Error; err != nil {
+		return
 	}
+
+	// 写入任务开始日志
+	api.writeTaskLog(task.ID, "", "info", "init", "部署任务开始执行")
 
 	// 确定要执行的客户端
 	var clientsToExecute []string
@@ -1521,9 +1576,12 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 				}
 			}
 		}
+		api.writeTaskLog(task.ID, "", "info", "init", "金丝雀模式，首批执行 "+strconv.Itoa(len(clientsToExecute))+" 个节点")
 	} else {
 		clientsToExecute = task.ClientIDs
 	}
+
+	api.writeTaskLog(task.ID, "", "info", "init", "共 "+strconv.Itoa(len(clientsToExecute))+" 个目标待部署")
 
 	// 使用远程执行器执行命令
 	if api.engine != nil {
@@ -1547,9 +1605,148 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 			}
 			api.db.Save(task)
 
-			// 执行远程命令
-			result, err := api.engine.ExecuteRemote(clientID, script, version.WorkDir)
+			// 记录开始执行日志
+			canaryLabel := ""
+			if isCanary {
+				canaryLabel = "[金丝雀] "
+			}
+			api.writeTaskLog(task.ID, clientID, "info", "start", canaryLabel+"开始部署到 "+clientID)
+
+			var result string
+			var err error
+
+			// 根据项目类型选择执行方式
+			switch project.Type {
+			case models.DeployTypeContainer:
+				// 容器部署：使用三层配置合并
+				api.writeTaskLog(task.ID, clientID, "info", "container", "执行容器部署...")
+
+				// 合并配置：项目 + 版本 + 任务覆盖
+				finalConfig := models.MergeContainerConfig(
+					project.ContainerConfig,
+					version.DeployConfig,
+					task.OverrideConfig,
+				)
+
+				if finalConfig == nil {
+					api.writeTaskLog(task.ID, clientID, "error", "container", "容器配置合并失败：项目未配置容器部署")
+					err = fmt.Errorf("container config merge failed: project has no container config")
+				} else {
+					// 向后兼容：如果版本有旧的 ContainerImage 字段，优先使用
+					if version.ContainerImage != "" && finalConfig.Image == "" {
+						finalConfig.Image = version.ContainerImage
+					}
+
+					result, err = api.engine.ExecuteContainerDeployWithMergedConfig(
+						clientID,
+						task.Operation,
+						version.Version,
+						finalConfig,
+					)
+				}
+			case models.DeployTypeKubernetes:
+				// K8s 部署：使用三层配置合并
+				api.writeTaskLog(task.ID, clientID, "info", "kubernetes", "执行 K8s 部署...")
+
+				// 合并配置：项目 + 版本 + 任务覆盖
+				k8sConfig := models.MergeK8sConfig(
+					project.KubernetesConfig,
+					version.DeployConfig,
+					task.OverrideConfig,
+				)
+
+				if k8sConfig == nil {
+					api.writeTaskLog(task.ID, clientID, "error", "kubernetes", "K8s 配置合并失败：项目未配置 K8s 部署")
+					err = fmt.Errorf("k8s config merge failed: project has no kubernetes config")
+				} else {
+					// 向后兼容：如果版本有旧的 K8sYAML 字段，使用它
+					if version.K8sYAML != "" && k8sConfig.YAML == "" {
+						k8sConfig.YAML = version.K8sYAML
+					}
+
+					result, err = api.engine.ExecuteK8sDeployWithMergedConfig(
+						clientID,
+						task.Operation,
+						version.Version,
+						k8sConfig,
+					)
+				}
+			case models.DeployTypeGitPull:
+				// Git 拉取部署：使用项目的 GitPullConfig 和版本的 GitRef
+				api.writeTaskLog(task.ID, clientID, "info", "git", "执行 Git 拉取部署...")
+
+				if project.GitPullConfig == nil {
+					api.writeTaskLog(task.ID, clientID, "error", "git", "项目未配置 Git 拉取部署")
+					err = fmt.Errorf("project git pull config is nil")
+				} else {
+					// 计算实际使用的工作目录（与 ExecuteGitPullDeployTask 逻辑一致）
+					// 项目配置优先，版本配置只在非默认值且项目配置为空时使用
+					workDir := project.GitPullConfig.WorkDir
+					if workDir == "" {
+						if version.WorkDir != "" && version.WorkDir != "/opt/app" {
+							workDir = version.WorkDir
+						}
+					}
+					if workDir == "" {
+						workDir = "/opt/app"
+					}
+
+					gitRef := version.GitRef
+					if gitRef == "" {
+						if project.GitPullConfig.Tag != "" {
+							gitRef = project.GitPullConfig.Tag
+						} else if project.GitPullConfig.Branch != "" {
+							gitRef = project.GitPullConfig.Branch
+						} else {
+							gitRef = "main"
+						}
+					}
+					api.writeTaskLog(task.ID, clientID, "info", "git", fmt.Sprintf("仓库: %s, 分支/Tag: %s, 工作目录: %s", project.GitPullConfig.RepoURL, gitRef, workDir))
+
+					result, err = api.engine.ExecuteGitPullDeployTask(
+						clientID,
+						task.Operation,
+						version.Version,
+						project.GitPullConfig,
+						version.WorkDir,
+						version.GitRef,
+						version.GitRefType,
+					)
+
+					// 记录 Git 输出（无论成功或失败）
+					if result != "" {
+						// 限制输出长度
+						outputLog := result
+						if len(outputLog) > 2000 {
+							outputLog = outputLog[:2000] + "... (truncated)"
+						}
+						api.writeTaskLog(task.ID, clientID, "debug", "git", outputLog)
+					}
+				}
+			default:
+				// 脚本部署：根据操作类型选择脚本
+				api.writeTaskLog(task.ID, clientID, "info", "script", "执行脚本部署...")
+				var script string
+				switch task.Operation {
+				case models.OperationTypeInstall:
+					script = version.InstallScript
+				case models.OperationTypeUpdate:
+					script = version.UpdateScript
+				case models.OperationTypeRollback:
+					script = version.RollbackScript
+				case models.OperationTypeUninstall:
+					script = version.UninstallScript
+				}
+				result, err = api.engine.ExecuteRemote(clientID, script, version.WorkDir)
+			}
+
 			finishTime := time.Now()
+
+			// 解析 Container ID（仅容器部署时）
+			var containerID string
+			if project.Type == models.DeployTypeContainer && result != "" {
+				containerID = parseContainerIDFromOutput(result)
+			}
 
 			// 更新结果
 			var status string
@@ -1564,17 +1761,30 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 						errMsg = err.Error()
 						task.Results[i].Status = status
 						task.Results[i].Error = errMsg
+						task.Results[i].ContainerID = containerID // 即使失败也记录 Container ID
 						task.FailedCount++
+
+						// 记录失败日志
+						api.writeTaskLog(task.ID, clientID, "error", "failed", "部署失败: "+errMsg)
 
 						// 如果是升级操作且启用了自动回滚
 						if task.Operation == models.OperationTypeUpdate && task.AutoRollback {
+							api.writeTaskLog(task.ID, clientID, "warn", "rollback", "触发自动回滚...")
 							go api.autoRollbackClient(task, &version, clientID)
 						}
 					} else {
 						status = "success"
 						task.Results[i].Status = status
 						task.Results[i].Output = result
+						task.Results[i].ContainerID = containerID
 						task.SuccessCount++
+
+						// 记录成功日志
+						successMsg := "部署成功"
+						if containerID != "" {
+							successMsg += ", Container ID: " + containerID[:12]
+						}
+						api.writeTaskLog(task.ID, clientID, "info", "success", successMsg)
 					}
 					task.PendingCount--
 				}
@@ -1582,18 +1792,20 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 			api.db.Save(task)
 
 			// 记录部署日志
-			api.recordDeployLog(task, &version, clientID, status, 0, result, errMsg, startTime, finishTime, isCanary)
+			api.recordDeployLog(task, &version, clientID, status, 0, result, errMsg, startTime, finishTime, isCanary, containerID)
 
 			// 检查失败策略
 			if err != nil {
 				switch task.FailureStrategy {
 				case "abort":
+					api.writeTaskLog(task.ID, "", "error", "abort", "部署失败，根据失败策略终止任务")
 					now := time.Now()
 					task.Status = "failed"
 					task.FinishedAt = &now
 					api.db.Save(task)
 					return
 				case "pause":
+					api.writeTaskLog(task.ID, "", "warn", "pause", "部署失败，根据失败策略暂停任务")
 					task.Status = "paused"
 					api.db.Save(task)
 					return
@@ -1607,8 +1819,10 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 		now := time.Now()
 		if task.FailedCount > 0 {
 			task.Status = "failed"
+			api.writeTaskLog(task.ID, "", "error", "complete", "部署任务完成，成功: "+strconv.Itoa(task.SuccessCount)+", 失败: "+strconv.Itoa(task.FailedCount))
 		} else {
 			task.Status = "completed"
+			api.writeTaskLog(task.ID, "", "info", "complete", "部署任务全部成功，共 "+strconv.Itoa(task.SuccessCount)+" 个目标")
 		}
 		task.FinishedAt = &now
 
@@ -1900,27 +2114,279 @@ func (api *ReleaseAPI) GetDeployStats(c *gin.Context) {
 	})
 }
 
-// recordDeployLog 记录部署日志
-func (api *ReleaseAPI) recordDeployLog(task *models.DeployTask, version *models.Version, clientID string, status string, exitCode int, output, errMsg string, startedAt, finishedAt time.Time, isCanary bool) {
-	log := &models.DeployLog{
-		TaskID:     task.ID,
-		ProjectID:  task.ProjectID,
-		VersionID:  task.VersionID,
-		Version:    task.Version,
-		ClientID:   clientID,
-		Operation:  task.Operation,
-		IsCanary:   isCanary,
-		Status:     status,
-		ExitCode:   exitCode,
-		Output:     output,
-		Error:      errMsg,
-		StartedAt:  startedAt,
-		FinishedAt: finishedAt,
-		Duration:   int(finishedAt.Sub(startedAt).Seconds()),
-		CreatedBy:  task.CreatedBy,
+// parseContainerIDFromOutput 从部署输出中解析 Container ID
+// 查找格式: DEPLOY_CONTAINER_ID=<id>
+func parseContainerIDFromOutput(output string) string {
+	re := regexp.MustCompile(`DEPLOY_CONTAINER_ID=([a-f0-9]{64}|[a-f0-9]{12})`)
+	matches := re.FindStringSubmatch(output)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// writeTaskLog 写入部署任务实时日志
+func (api *ReleaseAPI) writeTaskLog(taskID, clientID, level, stage, message string) {
+	if api.db == nil {
+		return
+	}
+
+	log := &models.DeployTaskLog{
+		TaskID:    taskID,
+		ClientID:  clientID,
+		Level:     level,
+		Stage:     stage,
+		Message:   message,
+		Timestamp: time.Now(),
 	}
 
 	api.db.Create(log)
+}
+
+// recordDeployLog 记录部署日志
+func (api *ReleaseAPI) recordDeployLog(task *models.DeployTask, version *models.Version, clientID string, status string, exitCode int, output, errMsg string, startedAt, finishedAt time.Time, isCanary bool, containerID string) {
+	log := &models.DeployLog{
+		TaskID:      task.ID,
+		ProjectID:   task.ProjectID,
+		VersionID:   task.VersionID,
+		Version:     task.Version,
+		ClientID:    clientID,
+		Operation:   task.Operation,
+		IsCanary:    isCanary,
+		Status:      status,
+		ExitCode:    exitCode,
+		Output:      output,
+		Error:       errMsg,
+		ContainerID: containerID,
+		StartedAt:   startedAt,
+		FinishedAt:  finishedAt,
+		Duration:    int(finishedAt.Sub(startedAt).Seconds()),
+		CreatedBy:   task.CreatedBy,
+	}
+
+	api.db.Create(log)
+}
+
+// ==================== 部署任务日志 API ====================
+
+// GetDeployTaskLogs 获取部署任务的执行日志
+func (api *ReleaseAPI) GetDeployTaskLogs(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	taskID := c.Param("id")
+	clientID := c.Query("client_id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	query := api.db.Model(&models.DeployTaskLog{}).Where("task_id = ?", taskID)
+	if clientID != "" {
+		query = query.Where("client_id = ?", clientID)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var logs []models.DeployTaskLog
+	if err := query.Order("timestamp ASC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"logs":    logs,
+		"total":   total,
+	})
+}
+
+// StreamDeployTaskLogs 实时推送部署任务日志 (SSE)
+func (api *ReleaseAPI) StreamDeployTaskLogs(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	taskID := c.Param("id")
+	clientID := c.Query("client_id")
+
+	// 验证任务存在
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", taskID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	// 设置 SSE 响应头
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 记录上次读取的日志 ID
+	var lastID string
+
+	// 推送已有日志
+	query := api.db.Model(&models.DeployTaskLog{}).Where("task_id = ?", taskID)
+	if clientID != "" {
+		query = query.Where("client_id = ?", clientID)
+	}
+
+	var existingLogs []models.DeployTaskLog
+	query.Order("timestamp ASC").Find(&existingLogs)
+
+	for _, log := range existingLogs {
+		data := map[string]interface{}{
+			"id":        log.ID,
+			"client_id": log.ClientID,
+			"level":     log.Level,
+			"stage":     log.Stage,
+			"message":   log.Message,
+			"timestamp": log.Timestamp,
+		}
+		c.SSEvent("log", data)
+		lastID = log.ID
+	}
+	c.Writer.Flush()
+
+	// 轮询新日志
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	// 监听客户端关闭
+	clientGone := c.Writer.CloseNotify()
+
+	for {
+		select {
+		case <-clientGone:
+			return
+		case <-ticker.C:
+			// 刷新任务状态
+			api.db.First(&task, "id = ?", taskID)
+
+			// 查询新日志
+			newQuery := api.db.Model(&models.DeployTaskLog{}).Where("task_id = ?", taskID)
+			if clientID != "" {
+				newQuery = newQuery.Where("client_id = ?", clientID)
+			}
+			if lastID != "" {
+				newQuery = newQuery.Where("id > ?", lastID)
+			}
+
+			var newLogs []models.DeployTaskLog
+			newQuery.Order("timestamp ASC").Find(&newLogs)
+
+			for _, log := range newLogs {
+				data := map[string]interface{}{
+					"id":        log.ID,
+					"client_id": log.ClientID,
+					"level":     log.Level,
+					"stage":     log.Stage,
+					"message":   log.Message,
+					"timestamp": log.Timestamp,
+				}
+				c.SSEvent("log", data)
+				lastID = log.ID
+			}
+
+			// 发送任务状态
+			c.SSEvent("status", map[string]interface{}{
+				"task_status":   task.Status,
+				"success_count": task.SuccessCount,
+				"failed_count":  task.FailedCount,
+				"pending_count": task.PendingCount,
+			})
+			c.Writer.Flush()
+
+			// 任务完成时发送结束事件
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+				c.SSEvent("done", map[string]interface{}{
+					"task_status": task.Status,
+				})
+				c.Writer.Flush()
+				return
+			}
+		}
+	}
+}
+
+// GetClientContainerLogs 获取指定客户端的容器日志
+func (api *ReleaseAPI) GetClientContainerLogs(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	taskID := c.Param("id")
+	clientID := c.Param("client_id")
+	lines, _ := strconv.Atoi(c.DefaultQuery("lines", "100"))
+	since := c.Query("since")
+
+	// 获取任务信息
+	var task models.DeployTask
+	if err := api.db.First(&task, "id = ?", taskID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "task not found"})
+		return
+	}
+
+	// 查找该客户端的执行结果
+	var containerID string
+	for _, result := range task.Results {
+		if result.ClientID == clientID {
+			containerID = result.ContainerID
+			break
+		}
+	}
+
+	if containerID == "" {
+		// 尝试从部署日志中获取
+		var deployLog models.DeployLog
+		if err := api.db.First(&deployLog, "task_id = ? AND client_id = ?", taskID, clientID).Error; err == nil {
+			containerID = deployLog.ContainerID
+		}
+	}
+
+	if containerID == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "container ID not found for this client",
+		})
+		return
+	}
+
+	// 构建 docker logs 命令
+	logsCmd := "docker logs"
+	if lines > 0 {
+		logsCmd += " --tail " + strconv.Itoa(lines)
+	}
+	if since != "" {
+		logsCmd += " --since " + since
+	}
+	logsCmd += " " + containerID
+
+	// 使用远程执行器获取日志
+	if api.engine == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "remote executor not available",
+		})
+		return
+	}
+
+	output, err := api.engine.ExecuteRemote(clientID, logsCmd, "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "failed to get container logs: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"container_id": containerID,
+		"client_id":    clientID,
+		"logs":         output,
+	})
 }
 
 // ==================== 脚本验证 ====================
@@ -2549,4 +3015,122 @@ func (api *ReleaseAPI) GetContainersOverview(c *gin.Context) {
 		"total_containers": totalContainers,
 		"by_project":       byProject,
 	})
+}
+
+// ==================== 配置预览 API ====================
+
+// PreviewDeployConfig 预览部署配置（显示合并后的最终配置）
+// POST /release/config-preview
+func (api *ReleaseAPI) PreviewDeployConfig(c *gin.Context) {
+	if !api.checkDB(c) {
+		return
+	}
+
+	var req struct {
+		ProjectID      string                     `json:"project_id" binding:"required"`
+		VersionID      string                     `json:"version_id"`
+		OverrideConfig *models.TaskOverrideConfig `json:"override_config"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 获取项目
+	var project models.Project
+	if err := api.db.First(&project, "id = ?", req.ProjectID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "project not found"})
+		return
+	}
+
+	// 获取版本配置（如果提供了版本 ID）
+	var versionConfig *models.VersionDeployConfig
+	if req.VersionID != "" {
+		var version models.Version
+		if err := api.db.First(&version, "id = ?", req.VersionID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "version not found"})
+			return
+		}
+		versionConfig = version.DeployConfig
+	}
+
+	// 根据项目类型返回不同的合并配置
+	switch project.Type {
+	case models.DeployTypeContainer:
+		if project.ContainerConfig == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "project container config not found",
+			})
+			return
+		}
+		finalConfig := models.MergeContainerConfig(
+			project.ContainerConfig,
+			versionConfig,
+			req.OverrideConfig,
+		)
+		c.JSON(http.StatusOK, gin.H{
+			"success":      true,
+			"deploy_type":  "container",
+			"final_config": finalConfig,
+			"config_sources": gin.H{
+				"project":  project.ContainerConfig,
+				"version":  versionConfig,
+				"override": req.OverrideConfig,
+			},
+		})
+
+	case models.DeployTypeKubernetes:
+		if project.KubernetesConfig == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "project kubernetes config not found",
+			})
+			return
+		}
+		finalConfig := models.MergeK8sConfig(
+			project.KubernetesConfig,
+			versionConfig,
+			req.OverrideConfig,
+		)
+		c.JSON(http.StatusOK, gin.H{
+			"success":      true,
+			"deploy_type":  "kubernetes",
+			"final_config": finalConfig,
+			"config_sources": gin.H{
+				"project":  project.KubernetesConfig,
+				"version":  versionConfig,
+				"override": req.OverrideConfig,
+			},
+		})
+
+	case models.DeployTypeScript:
+		// 脚本部署暂不支持配置合并
+		c.JSON(http.StatusOK, gin.H{
+			"success":     true,
+			"deploy_type": "script",
+			"message":     "script deployment does not support config merge preview",
+			"config_sources": gin.H{
+				"project": project.ScriptConfig,
+			},
+		})
+
+	case models.DeployTypeGitPull:
+		// Git 拉取部署暂不支持配置合并
+		c.JSON(http.StatusOK, gin.H{
+			"success":     true,
+			"deploy_type": "gitpull",
+			"message":     "gitpull deployment does not support config merge preview",
+			"config_sources": gin.H{
+				"project": project.GitPullConfig,
+			},
+		})
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "unsupported deploy type: " + string(project.Type),
+		})
+	}
 }

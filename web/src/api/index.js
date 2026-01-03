@@ -418,6 +418,78 @@ export const api = {
     return request.post(`/release/tasks/${id}/rollback`)
   },
 
+  // ===== 部署任务实时日志 =====
+
+  // 获取部署任务的执行日志
+  getDeployTaskLogs(taskId, params = {}) {
+    return request.get(`/release/tasks/${taskId}/logs`, { params })
+  },
+
+  // 获取指定客户端的容器日志（按 Container ID）
+  getClientContainerLogs(taskId, clientId, params = {}) {
+    return request.get(`/release/tasks/${taskId}/clients/${clientId}/container-logs`, { params })
+  },
+
+  /**
+   * 流式获取部署任务日志 (SSE) - 实时更新
+   * @param {string} taskId - 任务 ID
+   * @param {Object} params - 请求参数 {client_id?}
+   * @param {Function} onLog - 收到日志时的回调 (log) => {}
+   * @param {Function} onStatus - 收到状态更新时的回调 (status) => {}
+   * @param {Function} onDone - 任务完成时的回调 (data) => {}
+   * @param {Function} onError - 发生错误时的回调 (error) => {}
+   * @returns {Object} - 返回可取消的对象，可调用 .close() 关闭连接
+   */
+  streamDeployTaskLogs(taskId, params, onLog, onStatus, onDone, onError) {
+    const queryParams = new URLSearchParams()
+    if (params.client_id) {
+      queryParams.append('client_id', params.client_id)
+    }
+
+    const queryString = queryParams.toString()
+    const url = `/api/release/tasks/${taskId}/logs/stream${queryString ? '?' + queryString : ''}`
+
+    const eventSource = new EventSource(url)
+
+    eventSource.addEventListener('log', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (onLog) onLog(data)
+      } catch (e) {
+        console.error('Failed to parse log event:', e)
+      }
+    })
+
+    eventSource.addEventListener('status', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (onStatus) onStatus(data)
+      } catch (e) {
+        console.error('Failed to parse status event:', e)
+      }
+    })
+
+    eventSource.addEventListener('done', (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (onDone) onDone(data)
+        eventSource.close()
+      } catch (e) {
+        console.error('Failed to parse done event:', e)
+      }
+    })
+
+    eventSource.onerror = (error) => {
+      if (onError) {
+        onError(error)
+      }
+    }
+
+    return {
+      close: () => eventSource.close()
+    }
+  },
+
   // ===== 部署日志 =====
 
   // 获取部署日志列表
@@ -453,6 +525,73 @@ export const api = {
   // 获取 Git 仓库版本信息（tags、branches、commits）
   getGitVersions(data) {
     return request.post('/release/git-versions', data)
+  },
+
+  // ===== 容器日志 API =====
+
+  // 获取容器日志（一次性获取）
+  getContainerLogs(data) {
+    return request.post('/containers/logs', data)
+  },
+
+  /**
+   * 流式获取容器日志 (SSE) - 实时更新
+   * @param {Object} params - 请求参数 {client_id, container_id?, container_name?, tail?, timestamps?}
+   * @param {Function} onLogs - 收到日志时的回调 (event) => {}
+   * @param {Function} onStart - 开始时的回调 (event) => {}
+   * @param {Function} onError - 发生错误时的回调 (event) => {}
+   * @returns {Object} - 返回可取消的对象，可调用 .close() 关闭连接
+   */
+  streamContainerLogs(params, onLogs, onStart, onError) {
+    // 构建 URL 查询参数
+    const queryParams = new URLSearchParams()
+    queryParams.append('client_id', params.client_id)
+    if (params.container_id) {
+      queryParams.append('container_id', params.container_id)
+    }
+    if (params.container_name) {
+      queryParams.append('container_name', params.container_name)
+    }
+    if (params.tail) {
+      queryParams.append('tail', params.tail.toString())
+    }
+    if (params.timestamps) {
+      queryParams.append('timestamps', 'true')
+    }
+
+    const url = `/api/containers/logs/stream?${queryParams.toString()}`
+
+    // 使用 EventSource 实现 SSE (GET 请求)
+    const eventSource = new EventSource(url)
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'start' && onStart) {
+          onStart(data)
+        } else if (data.type === 'logs' && onLogs) {
+          onLogs(data)
+        } else if (data.type === 'error' && onError) {
+          onError(data)
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE event:', e, event.data)
+      }
+    }
+
+    eventSource.onerror = (error) => {
+      if (onError) {
+        onError({ type: 'error', error: 'Connection error' })
+      }
+      // EventSource 会自动重连，如果不需要可以在这里关闭
+    }
+
+    // 返回一个可以关闭的对象
+    return {
+      close: () => {
+        eventSource.close()
+      }
+    }
   }
 }
 

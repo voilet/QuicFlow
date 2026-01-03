@@ -198,17 +198,32 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 		}
 		args = append(args, repoURL, params.WorkDir)
 
+		// 记录执行的命令（隐藏敏感信息）
+		logArgs := make([]string, len(args))
+		copy(logArgs, args)
+		// 隐藏 URL 中的 token
+		for i, arg := range logArgs {
+			if strings.Contains(arg, "@") && (strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://")) {
+				logArgs[i] = hideCredentialsInURL(arg)
+			}
+		}
+		cmdStr := fmt.Sprintf("git %s", strings.Join(logArgs, " "))
+		fmt.Fprintf(writer, "[CMD] %s\n", cmdStr)
+		fmt.Fprintf(writer, "[WorkDir] %s\n", params.WorkDir)
+
 		cmd := exec.CommandContext(execCtx, "git", args...)
 		cmd.Env = env
 		cmd.Stdout = writer
 		cmd.Stderr = writer
 
 		if err := cmd.Run(); err != nil {
-			return outputBuf.String(), "", "", fmt.Errorf("git clone failed: %w", err)
+			errOutput := outputBuf.String()
+			return errOutput, "", "", fmt.Errorf("git clone failed: %w\n%s", err, errOutput)
 		}
 
 		// 初始化子模块
 		if params.Submodules {
+			fmt.Fprintf(writer, "[CMD] git submodule update --init --recursive\n")
 			subCmd := exec.CommandContext(execCtx, "git", "submodule", "update", "--init", "--recursive")
 			subCmd.Dir = params.WorkDir
 			subCmd.Env = env
@@ -218,14 +233,19 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 		}
 	} else {
 		// Pull
+		fmt.Fprintf(writer, "[INFO] Repository exists, updating...\n")
+		fmt.Fprintf(writer, "[WorkDir] %s\n", params.WorkDir)
+
 		// 首先 fetch
+		fmt.Fprintf(writer, "[CMD] git fetch --all --prune\n")
 		fetchCmd := exec.CommandContext(execCtx, "git", "fetch", "--all", "--prune")
 		fetchCmd.Dir = params.WorkDir
 		fetchCmd.Env = env
 		fetchCmd.Stdout = writer
 		fetchCmd.Stderr = writer
 		if err := fetchCmd.Run(); err != nil {
-			return outputBuf.String(), "", "", fmt.Errorf("git fetch failed: %w", err)
+			errOutput := outputBuf.String()
+			return errOutput, "", "", fmt.Errorf("git fetch failed: %w\n%s", err, errOutput)
 		}
 
 		// 切换到指定分支/tag/commit
@@ -240,6 +260,7 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 			checkoutRef = "origin/main" // 默认
 		}
 
+		fmt.Fprintf(writer, "[CMD] git checkout %s\n", checkoutRef)
 		checkoutCmd := exec.CommandContext(execCtx, "git", "checkout", checkoutRef)
 		checkoutCmd.Dir = params.WorkDir
 		checkoutCmd.Env = env
@@ -248,21 +269,26 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 		if err := checkoutCmd.Run(); err != nil {
 			// 尝试 origin/branch
 			if params.Branch != "" {
-				checkoutCmd2 := exec.CommandContext(execCtx, "git", "checkout", "origin/"+params.Branch)
+				originBranch := "origin/" + params.Branch
+				fmt.Fprintf(writer, "[CMD] git checkout %s (retry with origin prefix)\n", originBranch)
+				checkoutCmd2 := exec.CommandContext(execCtx, "git", "checkout", originBranch)
 				checkoutCmd2.Dir = params.WorkDir
 				checkoutCmd2.Env = env
 				checkoutCmd2.Stdout = writer
 				checkoutCmd2.Stderr = writer
 				if err2 := checkoutCmd2.Run(); err2 != nil {
-					return outputBuf.String(), "", "", fmt.Errorf("git checkout failed: %w", err)
+					errOutput := outputBuf.String()
+					return errOutput, "", "", fmt.Errorf("git checkout failed: %w\n%s", err, errOutput)
 				}
 			} else {
-				return outputBuf.String(), "", "", fmt.Errorf("git checkout failed: %w", err)
+				errOutput := outputBuf.String()
+				return errOutput, "", "", fmt.Errorf("git checkout failed: %w\n%s", err, errOutput)
 			}
 		}
 
 		// 如果是分支，执行 pull
 		if params.Commit == "" && params.Tag == "" {
+			fmt.Fprintf(writer, "[CMD] git pull --ff-only\n")
 			pullCmd := exec.CommandContext(execCtx, "git", "pull", "--ff-only")
 			pullCmd.Dir = params.WorkDir
 			pullCmd.Env = env
@@ -273,6 +299,7 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 
 		// 更新子模块
 		if params.Submodules {
+			fmt.Fprintf(writer, "[CMD] git submodule update --init --recursive\n")
 			subCmd := exec.CommandContext(execCtx, "git", "submodule", "update", "--init", "--recursive")
 			subCmd.Dir = params.WorkDir
 			subCmd.Env = env
@@ -293,7 +320,20 @@ func executeGitOperation(ctx context.Context, params command.GitPullDeployParams
 	branchOutput, _ := branchCmd.Output()
 	branch = strings.TrimSpace(string(branchOutput))
 
+	fmt.Fprintf(writer, "[SUCCESS] Commit: %s, Branch: %s\n", commit, branch)
+
 	return outputBuf.String(), commit, branch, nil
+}
+
+// hideCredentialsInURL 隐藏 URL 中的凭证信息
+func hideCredentialsInURL(urlStr string) string {
+	// https://user:token@github.com/... -> https://***@github.com/...
+	if idx := strings.Index(urlStr, "@"); idx > 0 {
+		prefix := urlStr[:strings.Index(urlStr, "//")+2]
+		suffix := urlStr[idx:]
+		return prefix + "***" + suffix
+	}
+	return urlStr
 }
 
 // executeScript 执行脚本
@@ -475,6 +515,12 @@ func GitVersions(ctx context.Context, payload json.RawMessage) (json.RawMessage,
 			commitCmd.Dir = workDir
 			if commitOut, err := commitCmd.Output(); err == nil {
 				tag.Commit = strings.TrimSpace(string(commitOut))
+			}
+			// 获取 tag 对应的 commit message
+			msgCmd := exec.CommandContext(ctx, "git", "log", "-1", "--format=%s", line)
+			msgCmd.Dir = workDir
+			if msgOut, err := msgCmd.Output(); err == nil {
+				tag.Message = strings.TrimSpace(string(msgOut))
 			}
 			result.Tags = append(result.Tags, tag)
 		}
