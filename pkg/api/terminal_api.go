@@ -58,6 +58,7 @@ type TerminalManager struct {
 	mu              sync.RWMutex
 	auditStore      audit.Store
 	recordingConfig *recording.Config
+	recordingDBStore *recording.DBStore
 }
 
 // TerminalSession WebSocket 终端会话
@@ -92,12 +93,27 @@ func NewTerminalManager(sshManager TerminalManagerAPI, logger *monitoring.Logger
 // NewTerminalManagerWithRecording 创建带录制功能的终端管理器
 func NewTerminalManagerWithRecording(sshManager TerminalManagerAPI, logger *monitoring.Logger, auditStore audit.Store, recordingConfig *recording.Config) *TerminalManager {
 	return &TerminalManager{
-		sshManager:      sshManager,
-		logger:          logger,
-		sessions:        make(map[string]*TerminalSession),
-		auditStore:      auditStore,
-		recordingConfig: recordingConfig,
+		sshManager:       sshManager,
+		logger:           logger,
+		sessions:         make(map[string]*TerminalSession),
+		auditStore:       auditStore,
+		recordingConfig:  recordingConfig,
+		recordingDBStore: nil,
 	}
+}
+
+// SetRecordingDBStore 设置录制数据库存储（当数据库可用时调用）
+func (tm *TerminalManager) SetRecordingDBStore(store *recording.DBStore) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.recordingDBStore = store
+}
+
+// SetAuditStore updates the audit store (used when database becomes available)
+func (tm *TerminalManager) SetAuditStore(store audit.Store) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.auditStore = store
 }
 
 // HandleWebSocket 处理 WebSocket 终端连接
@@ -180,7 +196,7 @@ func (tm *TerminalManager) HandleWebSocket(c *gin.Context) {
 
 	if tm.recordingConfig != nil && tm.recordingConfig.Enabled {
 		var err error
-		recorder, err = recording.NewRecorder(tm.recordingConfig, ptyInfo.ID, clientID, "admin", cols, rows)
+		recorder, err = recording.NewRecorderWithDB(tm.recordingConfig, ptyInfo.ID, clientID, "admin", cols, rows, tm.recordingDBStore)
 		if err != nil {
 			tm.logger.Error("Failed to create recorder", "error", err)
 		} else {

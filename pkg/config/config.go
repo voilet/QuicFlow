@@ -133,6 +133,8 @@ type LogSettings struct {
 type DatabaseSettings struct {
 	// 是否启用数据库
 	Enabled bool `mapstructure:"enabled"`
+	// 数据库类型: postgres, mysql
+	Type string `mapstructure:"type"`
 	// 数据库主机
 	Host string `mapstructure:"host"`
 	// 数据库端口
@@ -143,8 +145,10 @@ type DatabaseSettings struct {
 	Password string `mapstructure:"password"`
 	// 数据库名称
 	DBName string `mapstructure:"dbname"`
-	// SSL 模式: disable, require, verify-ca, verify-full
+	// SSL 模式: disable, require, verify-ca, verify-full (PostgreSQL 专用)
 	SSLMode string `mapstructure:"sslmode"`
+	// 字符集 (MySQL 专用)
+	Charset string `mapstructure:"charset"`
 	// 是否自动迁移表结构
 	AutoMigrate bool `mapstructure:"auto_migrate"`
 }
@@ -200,12 +204,14 @@ func DefaultConfig() *ServerConfig {
 		},
 		Database: DatabaseSettings{
 			Enabled:     true,
+			Type:        "postgres",
 			Host:        "localhost",
 			Port:        5432,
 			User:        "postgres",
 			Password:    "postgres",
 			DBName:      "quic_release",
 			SSLMode:     "disable",
+			Charset:     "utf8mb4",
 			AutoMigrate: true,
 		},
 	}
@@ -359,12 +365,14 @@ func setDefaults(v *viper.Viper) {
 
 	// Database
 	v.SetDefault("database.enabled", defaults.Database.Enabled)
+	v.SetDefault("database.type", defaults.Database.Type)
 	v.SetDefault("database.host", defaults.Database.Host)
 	v.SetDefault("database.port", defaults.Database.Port)
 	v.SetDefault("database.user", defaults.Database.User)
 	v.SetDefault("database.password", defaults.Database.Password)
 	v.SetDefault("database.dbname", defaults.Database.DBName)
 	v.SetDefault("database.sslmode", defaults.Database.SSLMode)
+	v.SetDefault("database.charset", defaults.Database.Charset)
 	v.SetDefault("database.auto_migrate", defaults.Database.AutoMigrate)
 }
 

@@ -2,6 +2,7 @@ package recording
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,10 +34,18 @@ type Recorder struct {
 	maxSize    int64
 
 	closed bool
+
+	// Database store for saving recording metadata
+	dbStore *DBStore
 }
 
 // NewRecorder creates a new session recorder
 func NewRecorder(config *Config, sessionID, clientID, username string, width, height int) (*Recorder, error) {
+	return NewRecorderWithDB(config, sessionID, clientID, username, width, height, nil)
+}
+
+// NewRecorderWithDB creates a new session recorder with database storage
+func NewRecorderWithDB(config *Config, sessionID, clientID, username string, width, height int, dbStore *DBStore) (*Recorder, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -72,6 +81,7 @@ func NewRecorder(config *Config, sessionID, clientID, username string, width, he
 		file:        file,
 		writer:      bufio.NewWriter(file),
 		maxSize:     config.MaxFileSize,
+		dbStore:     dbStore,
 	}
 
 	// Write header
@@ -205,13 +215,45 @@ func (r *Recorder) Close() error {
 		return err
 	}
 
+	// Get file path before closing
+	filePath := r.file.Name()
+
 	// Write metadata file
 	if err := r.writeMetaFile(); err != nil {
 		r.file.Close()
 		return err
 	}
 
-	return r.file.Close()
+	// Close file
+	if err := r.file.Close(); err != nil {
+		return err
+	}
+
+	// Save to database if dbStore is available
+	if r.dbStore != nil {
+		meta := RecordingMeta{
+			ID:          r.id,
+			SessionID:   r.sessionID,
+			ClientID:    r.clientID,
+			Username:    r.username,
+			Width:       r.width,
+			Height:      r.height,
+			Duration:    time.Since(r.startTime).Seconds(),
+			FileSize:    r.fileSize,
+			CreatedAt:   r.startTime,
+			RecordInput: r.recordInput,
+		}
+
+		// Use background context for database save
+		ctx := context.Background()
+		if err := r.dbStore.SaveRecording(ctx, &meta, filePath); err != nil {
+			// Log error but don't fail the close operation
+			// The metadata file is already written, so the recording is still valid
+			return fmt.Errorf("failed to save recording to database: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // writeMetaFile writes the metadata file alongside the recording

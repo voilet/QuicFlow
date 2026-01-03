@@ -16,16 +16,26 @@ import (
 
 // RecordingAPI handles recording API endpoints
 type RecordingAPI struct {
-	store  *recording.Store
-	logger *monitoring.Logger
+	store         *recording.Store
+	dbStore       *recording.DBStore
+	logger        *monitoring.Logger
+	useDatabase   bool
 }
 
 // NewRecordingAPI creates a new recording API handler
 func NewRecordingAPI(store *recording.Store, logger *monitoring.Logger) *RecordingAPI {
 	return &RecordingAPI{
-		store:  store,
-		logger: logger,
+		store:       store,
+		logger:      logger,
+		useDatabase: false,
 	}
+}
+
+// SetDBStore sets the database store and enables database mode
+func (a *RecordingAPI) SetDBStore(dbStore *recording.DBStore) {
+	a.dbStore = dbStore
+	a.useDatabase = true
+	a.logger.Info("Recording API now using database storage")
 }
 
 // RegisterRoutes registers recording API routes
@@ -85,7 +95,16 @@ func (a *RecordingAPI) ListRecordings(c *gin.Context) {
 		}
 	}
 
-	recordings, err := a.store.List(c.Request.Context(), filter)
+	var recordings []*recording.RecordingMeta
+	var err error
+
+	// Use database store if available, otherwise use file store
+	if a.useDatabase && a.dbStore != nil {
+		recordings, err = a.dbStore.List(c.Request.Context(), filter)
+	} else {
+		recordings, err = a.store.List(c.Request.Context(), filter)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -110,7 +129,16 @@ func (a *RecordingAPI) ListRecordings(c *gin.Context) {
 func (a *RecordingAPI) GetRecording(c *gin.Context) {
 	id := c.Param("id")
 
-	meta, err := a.store.Get(c.Request.Context(), id)
+	var meta *recording.RecordingMeta
+	var err error
+
+	// Use database store if available, otherwise use file store
+	if a.useDatabase && a.dbStore != nil {
+		meta, err = a.dbStore.Get(c.Request.Context(), id)
+	} else {
+		meta, err = a.store.Get(c.Request.Context(), id)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
@@ -174,7 +202,13 @@ func (a *RecordingAPI) StreamRecording(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 
 	// Get file path
-	filePath, err := a.store.GetFilePath(id)
+	var filePath string
+	var err error
+	if a.useDatabase && a.dbStore != nil {
+		filePath, err = a.dbStore.GetFilePath(c.Request.Context(), id)
+	} else {
+		filePath, err = a.store.GetFilePath(id)
+	}
 	if err != nil {
 		c.SSEvent("error", gin.H{"error": err.Error()})
 		return
@@ -278,7 +312,16 @@ func (a *RecordingAPI) DeleteRecording(c *gin.Context) {
 // @Success 200 {object} recording.StoreStats
 // @Router /api/recordings/stats [get]
 func (a *RecordingAPI) GetStats(c *gin.Context) {
-	stats, err := a.store.GetStats(c.Request.Context())
+	var stats *recording.StoreStats
+	var err error
+
+	// Use database store if available, otherwise use file store
+	if a.useDatabase && a.dbStore != nil {
+		stats, err = a.dbStore.GetStats(c.Request.Context())
+	} else {
+		stats, err = a.store.GetStats(c.Request.Context())
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

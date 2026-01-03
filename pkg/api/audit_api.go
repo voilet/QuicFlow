@@ -24,6 +24,11 @@ func NewAuditAPI(store audit.Store, logger *monitoring.Logger) *AuditAPI {
 	}
 }
 
+// SetStore updates the audit store (used when database becomes available)
+func (a *AuditAPI) SetStore(store audit.Store) {
+	a.store = store
+}
+
 // RegisterRoutes registers audit API routes
 func (a *AuditAPI) RegisterRoutes(router *gin.RouterGroup) {
 	auditGroup := router.Group("/audit")

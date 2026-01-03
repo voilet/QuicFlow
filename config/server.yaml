@@ -7,12 +7,14 @@ batch:
     retryinterval: 1
 database:
     enabled: true
+    type: postgres
     host: localhost
     port: 5432
     user: postgres
     password: ""
     dbname: quic_release
     sslmode: disable
+    charset: utf8mb4
     automigrate: true
 log:
     level: debug

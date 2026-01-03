@@ -691,27 +691,54 @@
     </el-dialog>
 
     <!-- 新建版本对话框 -->
-    <el-dialog v-model="versionDialogVisible" title="新建版本" width="800px" destroy-on-close>
-      <el-form :model="versionForm" :rules="versionRules" ref="versionFormRef" label-width="100px">
+    <el-dialog 
+      v-model="versionDialogVisible" 
+      :title="`新建版本 - ${selectedProject?.name || ''}`" 
+      width="900px" 
+      destroy-on-close
+      class="version-dialog"
+    >
+      <el-form :model="versionForm" :rules="versionRules" ref="versionFormRef" label-width="120px" class="version-form">
+        <!-- 基础信息 -->
         <el-form-item label="版本号" prop="version">
-          <el-input v-model="versionForm.version" placeholder="如: 1.0.0" />
+          <el-input 
+            v-model="versionForm.version" 
+            placeholder="如: 1.0.0" 
+            clearable
+            style="max-width: 300px;"
+          />
+          <!-- <div class="form-tip">遵循语义化版本规范 (SemVer)</div> -->
         </el-form-item>
         <el-form-item label="版本说明">
-          <el-input v-model="versionForm.description" type="textarea" rows="2" placeholder="版本更新说明" />
+          <el-input 
+            v-model="versionForm.description" 
+            type="textarea" 
+            :rows="2" 
+            placeholder="版本更新说明（可选）"
+            maxlength="500"
+            show-word-limit
+          />
         </el-form-item>
 
         <!-- Git 拉取项目：从仓库选择版本 -->
         <template v-if="selectedProject?.type === 'gitpull'">
-          <el-divider content-position="left">Git 版本选择</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><DocumentCopy /></el-icon>
+              Git 版本选择
+            </span>
+          </el-divider>
 
           <el-form-item label="获取版本">
-            <el-button type="primary" :loading="loadingGitVersions" @click="fetchGitVersions">
-              <el-icon><Refresh /></el-icon>
-              从仓库获取版本
-            </el-button>
-            <span class="form-tip ml-2" v-if="gitVersions.tags?.length > 0">
-              已获取 {{ gitVersions.tags.length }} 个 Tag, {{ gitVersions.branches?.length || 0 }} 个分支
-            </span>
+            <div class="flex-items-center">
+              <el-button type="primary" :loading="loadingGitVersions" @click="fetchGitVersions">
+                <el-icon><Refresh /></el-icon>
+                从仓库获取版本
+              </el-button>
+              <span class="form-tip ml-2" v-if="gitVersions.tags?.length > 0">
+                已获取 {{ gitVersions.tags.length }} 个 Tag, {{ gitVersions.branches?.length || 0 }} 个分支
+              </span>
+            </div>
           </el-form-item>
 
           <el-form-item label="版本类型">
@@ -723,33 +750,71 @@
           </el-form-item>
 
           <el-form-item v-if="gitVersionForm.version_type === 'tag'" label="选择 Tag">
-            <el-select v-model="gitVersionForm.selected_tag" placeholder="选择 Tag" style="width: 100%" filterable @change="onTagSelected">
-              <el-option v-for="tag in gitVersions.tags" :key="tag.name" :label="`${tag.name} - ${tag.message || tag.commit?.substring(0, 7)}`" :value="tag.name" />
+            <el-select 
+              v-model="gitVersionForm.selected_tag" 
+              placeholder="选择 Tag" 
+              style="width: 100%" 
+              filterable 
+              @change="onTagSelected"
+            >
+              <el-option 
+                v-for="tag in gitVersions.tags" 
+                :key="tag.name" 
+                :label="`${tag.name} - ${tag.message || tag.commit?.substring(0, 7)}`" 
+                :value="tag.name" 
+              />
             </el-select>
             <div class="form-tip" v-if="gitVersions.tags?.length === 0">暂无 Tag，请先获取版本</div>
           </el-form-item>
 
           <el-form-item v-if="gitVersionForm.version_type === 'branch'" label="选择分支">
-            <el-select v-model="gitVersionForm.selected_branch" placeholder="选择分支" style="width: 100%" filterable>
-              <el-option v-for="branch in gitVersions.branches" :key="branch.name" :label="`${branch.name}${branch.is_default ? ' (默认)' : ''}`" :value="branch.name" />
+            <el-select 
+              v-model="gitVersionForm.selected_branch" 
+              placeholder="选择分支" 
+              style="width: 100%" 
+              filterable
+            >
+              <el-option 
+                v-for="branch in gitVersions.branches" 
+                :key="branch.name" 
+                :label="`${branch.name}${branch.is_default ? ' (默认)' : ''}`" 
+                :value="branch.name" 
+              />
             </el-select>
           </el-form-item>
 
           <el-form-item v-if="gitVersionForm.version_type === 'commit'" label="选择 Commit">
-            <el-select v-model="gitVersionForm.selected_commit" placeholder="选择 Commit" style="width: 100%" filterable>
-              <el-option v-for="commit in gitVersions.recent_commits" :key="commit.hash" :label="`${commit.hash} - ${commit.message}`" :value="commit.full_hash || commit.hash" />
+            <el-select 
+              v-model="gitVersionForm.selected_commit" 
+              placeholder="选择 Commit" 
+              style="width: 100%" 
+              filterable
+            >
+              <el-option 
+                v-for="commit in gitVersions.recent_commits" 
+                :key="commit.hash" 
+                :label="`${commit.hash} - ${commit.message}`" 
+                :value="commit.full_hash || commit.hash" 
+              />
             </el-select>
           </el-form-item>
 
           <el-form-item label="当前信息" v-if="gitVersions.current_branch">
-            <el-tag>{{ gitVersions.current_branch }}</el-tag>
-            <span class="ml-2 text-gray">{{ gitVersions.current_commit?.substring(0, 7) }}</span>
+            <div class="flex-items-center">
+              <el-tag type="info">{{ gitVersions.current_branch }}</el-tag>
+              <span class="ml-2 text-gray">{{ gitVersions.current_commit?.substring(0, 7) }}</span>
+            </div>
           </el-form-item>
 
-          <el-divider content-position="left">部署脚本（可选）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Document /></el-icon>
+              部署脚本（可选）
+            </span>
+          </el-divider>
           <el-form-item label="部署前脚本">
             <CodeEditor
-              :key="`pre-script-${versionDialogVisible}`"
+              :key="`git-pre-${versionDialogVisible}`"
               v-model="versionForm.pre_script"
               language="shell"
               height="150px"
@@ -758,7 +823,7 @@
           </el-form-item>
           <el-form-item label="部署后脚本">
             <CodeEditor
-              :key="`post-script-${versionDialogVisible}`"
+              :key="`git-post-${versionDialogVisible}`"
               v-model="versionForm.post_script"
               language="shell"
               height="150px"
@@ -769,17 +834,28 @@
 
         <!-- 容器项目：镜像版本 -->
         <template v-else-if="selectedProject?.type === 'container'">
-          <el-divider content-position="left">容器镜像配置</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Box /></el-icon>
+              容器镜像配置
+            </span>
+          </el-divider>
 
           <el-form-item label="镜像地址" prop="container_image">
-            <el-input v-model="versionForm.container_image" placeholder="nginx:1.25.0 或 registry.example.com/app:v1.0.0" />
+            <el-input 
+              v-model="versionForm.container_image" 
+              placeholder="nginx:1.25.0 或 registry.example.com/app:v1.0.0" 
+              clearable
+            />
             <div class="form-tip" v-if="selectedProject?.container_config?.image">
-              项目默认镜像: {{ selectedProject.container_config.image }}
+              <el-icon><InfoFilled /></el-icon>
+              项目默认镜像: <code>{{ selectedProject.container_config.image }}</code>
             </div>
           </el-form-item>
 
           <el-form-item label="环境变量">
             <CodeEditor
+              :key="`container-env-${versionDialogVisible}`"
               v-model="versionForm.container_env"
               language="properties"
               height="120px"
@@ -787,29 +863,50 @@
             />
           </el-form-item>
 
-          <el-divider content-position="left">资源限制（可选，覆盖项目默认值）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Setting /></el-icon>
+              资源限制（可选，覆盖项目默认值）
+            </span>
+          </el-divider>
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="内存限制">
-                <el-input v-model="versionForm.deploy_config.resources.memory_limit" placeholder="512Mi" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.memory_limit" 
+                  placeholder="512Mi" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.container_config?.memory_limit">
-                  项目默认: {{ selectedProject.container_config.memory_limit }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.container_config.memory_limit }}</code>
                 </div>
               </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="CPU 限制">
-                <el-input v-model="versionForm.deploy_config.resources.cpu_limit" placeholder="500m" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.cpu_limit" 
+                  placeholder="500m" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.container_config?.cpu_limit">
-                  项目默认: {{ selectedProject.container_config.cpu_limit }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.container_config.cpu_limit }}</code>
                 </div>
               </el-form-item>
             </el-col>
           </el-row>
 
-          <el-divider content-position="left">部署脚本（可选）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Document /></el-icon>
+              部署脚本（可选）
+            </span>
+          </el-divider>
           <el-form-item label="部署前脚本">
             <CodeEditor
+              :key="`container-pre-${versionDialogVisible}`"
               v-model="versionForm.deploy_config.pre_script"
               language="shell"
               height="150px"
@@ -818,6 +915,7 @@
           </el-form-item>
           <el-form-item label="部署后脚本">
             <CodeEditor
+              :key="`container-post-${versionDialogVisible}`"
               v-model="versionForm.deploy_config.post_script"
               language="shell"
               height="150px"
@@ -828,40 +926,72 @@
 
         <!-- Kubernetes 项目 -->
         <template v-else-if="selectedProject?.type === 'kubernetes'">
-          <el-divider content-position="left">Kubernetes 部署配置</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Grid /></el-icon>
+              Kubernetes 部署配置
+            </span>
+          </el-divider>
 
           <el-form-item label="镜像版本" prop="container_image">
-            <el-input v-model="versionForm.container_image" placeholder="nginx:1.25.0（留空使用项目默认镜像）" />
+            <el-input 
+              v-model="versionForm.container_image" 
+              placeholder="nginx:1.25.0（留空使用项目默认镜像）" 
+              clearable
+            />
             <div class="form-tip" v-if="selectedProject?.k8s_config?.image">
-              项目默认镜像: {{ selectedProject.k8s_config.image }}
+              <el-icon><InfoFilled /></el-icon>
+              项目默认镜像: <code>{{ selectedProject.k8s_config.image }}</code>
             </div>
           </el-form-item>
 
           <el-form-item label="副本数">
-            <el-input-number v-model="versionForm.deploy_config.replicas" :min="1" :max="100" />
-            <span class="form-tip ml-2">
-              留空使用项目默认值
-              <template v-if="selectedProject?.k8s_config?.replicas">
-                ({{ selectedProject.k8s_config.replicas }})
-              </template>
-            </span>
+            <div class="flex-items-center">
+              <el-input-number 
+                v-model="versionForm.deploy_config.replicas" 
+                :min="1" 
+                :max="100" 
+                style="width: 150px;"
+              />
+              <span class="form-tip ml-2">
+                留空使用项目默认值
+                <template v-if="selectedProject?.k8s_config?.replicas">
+                  ({{ selectedProject.k8s_config.replicas }})
+                </template>
+              </span>
+            </div>
           </el-form-item>
 
-          <el-divider content-position="left">资源限制（可选，覆盖项目默认值）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Setting /></el-icon>
+              资源限制（可选，覆盖项目默认值）
+            </span>
+          </el-divider>
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="CPU Request">
-                <el-input v-model="versionForm.deploy_config.resources.cpu_request" placeholder="100m" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.cpu_request" 
+                  placeholder="100m" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.k8s_config?.cpu_request">
-                  项目默认: {{ selectedProject.k8s_config.cpu_request }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.k8s_config.cpu_request }}</code>
                 </div>
               </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="CPU Limit">
-                <el-input v-model="versionForm.deploy_config.resources.cpu_limit" placeholder="500m" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.cpu_limit" 
+                  placeholder="500m" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.k8s_config?.cpu_limit">
-                  项目默认: {{ selectedProject.k8s_config.cpu_limit }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.k8s_config.cpu_limit }}</code>
                 </div>
               </el-form-item>
             </el-col>
@@ -869,25 +999,41 @@
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="Memory Request">
-                <el-input v-model="versionForm.deploy_config.resources.memory_request" placeholder="128Mi" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.memory_request" 
+                  placeholder="128Mi" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.k8s_config?.memory_request">
-                  项目默认: {{ selectedProject.k8s_config.memory_request }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.k8s_config.memory_request }}</code>
                 </div>
               </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="Memory Limit">
-                <el-input v-model="versionForm.deploy_config.resources.memory_limit" placeholder="512Mi" />
+                <el-input 
+                  v-model="versionForm.deploy_config.resources.memory_limit" 
+                  placeholder="512Mi" 
+                  clearable
+                />
                 <div class="form-tip" v-if="selectedProject?.k8s_config?.memory_limit">
-                  项目默认: {{ selectedProject.k8s_config.memory_limit }}
+                  <el-icon><InfoFilled /></el-icon>
+                  项目默认: <code>{{ selectedProject.k8s_config.memory_limit }}</code>
                 </div>
               </el-form-item>
             </el-col>
           </el-row>
 
-          <el-divider content-position="left">环境变量（可选）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Key /></el-icon>
+              环境变量（可选）
+            </span>
+          </el-divider>
           <el-form-item label="环境变量">
             <CodeEditor
+              :key="`k8s-env-${versionDialogVisible}`"
               v-model="versionForm.container_env"
               language="properties"
               height="120px"
@@ -895,12 +1041,19 @@
             />
           </el-form-item>
 
-          <el-divider content-position="left">YAML 配置（可选）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><DocumentCopy /></el-icon>
+              YAML 配置（可选）
+            </span>
+          </el-divider>
           <el-form-item>
             <div class="form-tip mb-8">
+              <el-icon><InfoFilled /></el-icon>
               可选择覆盖默认配置，或提供完整的 Kubernetes YAML 资源定义
             </div>
             <CodeEditor
+              :key="`k8s-yaml-${versionDialogVisible}`"
               v-model="versionForm.deploy_config.k8s_yaml_full"
               language="yaml"
               height="250px"
@@ -908,9 +1061,15 @@
             />
           </el-form-item>
 
-          <el-divider content-position="left">部署脚本（可选）</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Document /></el-icon>
+              部署脚本（可选）
+            </span>
+          </el-divider>
           <el-form-item label="部署前脚本">
             <CodeEditor
+              :key="`k8s-pre-${versionDialogVisible}`"
               v-model="versionForm.deploy_config.pre_script"
               language="shell"
               height="150px"
@@ -919,6 +1078,7 @@
           </el-form-item>
           <el-form-item label="部署后脚本">
             <CodeEditor
+              :key="`k8s-post-${versionDialogVisible}`"
               v-model="versionForm.deploy_config.post_script"
               language="shell"
               height="150px"
@@ -930,14 +1090,25 @@
         <!-- 脚本项目：传统脚本编辑 -->
         <template v-else>
           <el-form-item label="工作目录">
-            <el-input v-model="versionForm.work_dir" placeholder="/opt/app" />
+            <el-input 
+              v-model="versionForm.work_dir" 
+              placeholder="/opt/app" 
+              clearable
+            />
+            <div class="form-tip">脚本执行的工作目录路径</div>
           </el-form-item>
 
-          <el-divider content-position="left">部署脚本</el-divider>
+          <el-divider content-position="left">
+            <span style="display: flex; align-items: center; gap: 6px;">
+              <el-icon><Document /></el-icon>
+              部署脚本
+            </span>
+          </el-divider>
 
-          <el-tabs v-model="scriptTab" type="border-card">
+          <el-tabs v-model="scriptTab" type="border-card" class="script-tabs">
             <el-tab-pane label="安装脚本" name="install">
               <CodeEditor
+                :key="`script-install-${versionDialogVisible}`"
                 v-model="versionForm.install_script"
                 language="shell"
                 height="250px"
@@ -946,6 +1117,7 @@
             </el-tab-pane>
             <el-tab-pane label="升级脚本" name="update">
               <CodeEditor
+                :key="`script-update-${versionDialogVisible}`"
                 v-model="versionForm.update_script"
                 language="shell"
                 height="250px"
@@ -954,6 +1126,7 @@
             </el-tab-pane>
             <el-tab-pane label="回滚脚本" name="rollback">
               <CodeEditor
+                :key="`script-rollback-${versionDialogVisible}`"
                 v-model="versionForm.rollback_script"
                 language="shell"
                 height="250px"
@@ -962,6 +1135,7 @@
             </el-tab-pane>
             <el-tab-pane label="卸载脚本" name="uninstall">
               <CodeEditor
+                :key="`script-uninstall-${versionDialogVisible}`"
                 v-model="versionForm.uninstall_script"
                 language="shell"
                 height="250px"
@@ -972,8 +1146,13 @@
         </template>
       </el-form>
       <template #footer>
-        <el-button @click="versionDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveVersion" :loading="submitting">保存</el-button>
+        <div class="dialog-footer">
+          <el-button @click="versionDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveVersion" :loading="submitting">
+            <el-icon v-if="!submitting"><Check /></el-icon>
+            保存版本
+          </el-button>
+        </div>
       </template>
     </el-dialog>
 
@@ -1929,7 +2108,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion,
-  Document, VideoPlay, VideoPause, View
+  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -4021,6 +4200,19 @@ onMounted(() => {
 .form-tip {
   font-size: 12px;
   color: var(--tech-text-muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.form-tip code {
+  background: var(--tech-bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: var(--tech-font-mono);
+  font-size: 11px;
+  color: var(--tech-primary);
 }
 
 .ml-2 {
@@ -4029,6 +4221,70 @@ onMounted(() => {
 
 .text-gray {
   color: #909399;
+}
+
+/* 版本对话框样式优化 */
+.version-dialog :deep(.el-dialog__header) {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--tech-border);
+}
+
+.version-dialog :deep(.el-dialog__body) {
+  padding: 20px;
+  max-height: calc(90vh - 120px);
+  overflow-y: auto;
+}
+
+.version-form {
+  padding: 0;
+}
+
+.version-form .el-form-item {
+  margin-bottom: 20px;
+}
+
+.version-form .el-divider {
+  margin: 24px 0 20px;
+}
+
+.version-form .el-divider__text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--tech-text-primary);
+}
+
+.flex-items-center {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--tech-border);
+}
+
+.version-dialog :deep(.el-divider) {
+  border-color: var(--tech-border);
+}
+
+.version-dialog :deep(.el-divider__text) {
+  background: var(--tech-bg-card);
+  padding: 0 12px;
+}
+
+.script-tabs {
+  margin-top: 0;
+}
+
+.script-tabs :deep(.el-tabs__content) {
+  padding: 16px;
 }
 
 .task-progress {

@@ -78,7 +78,7 @@
         :default-sort="{ prop: 'created_at', order: 'descending' }"
         table-layout="auto"
       >
-        <el-table-column prop="created_at" label="录制时间" min-width="180">
+        <el-table-column prop="created_at" label="录制时间" min-width="120">
           <template #default="scope">
             {{ formatTime(scope.row.created_at) }}
           </template>

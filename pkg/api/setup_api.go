@@ -57,18 +57,23 @@ func (s *SetupAPI) RegisterRoutes(r *gin.RouterGroup) {
 	{
 		setup.GET("/status", s.handleStatus)
 		setup.POST("/test-connection", s.handleTestConnection)
+		setup.POST("/list-databases", s.handleListDatabases)
 		setup.POST("/initialize", s.handleInitialize)
+		setup.GET("/tables", s.handleListTables)
+		setup.POST("/migrate", s.handleMigrate)
 	}
 }
 
 // DatabaseConfig 数据库配置请求
 type DatabaseConfig struct {
+	Type        string `json:"type"`                        // postgres 或 mysql
 	Host        string `json:"host" binding:"required"`
 	Port        int    `json:"port" binding:"required"`
 	User        string `json:"user" binding:"required"`
 	Password    string `json:"password"`
 	DBName      string `json:"dbname" binding:"required"`
-	SSLMode     string `json:"sslmode"`
+	SSLMode     string `json:"sslmode"`                     // PostgreSQL 专用
+	Charset     string `json:"charset"`                     // MySQL 专用
 	AutoMigrate bool   `json:"auto_migrate"`
 }
 
@@ -115,21 +120,31 @@ func (s *SetupAPI) handleTestConnection(c *gin.Context) {
 	}
 
 	// 设置默认值
+	dbType := releasemodels.DBType(req.Type)
+	if dbType == "" {
+		dbType = releasemodels.DBTypePostgres
+	}
 	if req.SSLMode == "" {
 		req.SSLMode = "disable"
+	}
+	if req.Charset == "" {
+		req.Charset = "utf8mb4"
 	}
 
 	// 构建配置
 	dbConfig := &releasemodels.DatabaseConfig{
+		Type:     dbType,
 		Host:     req.Host,
 		Port:     req.Port,
 		User:     req.User,
 		Password: req.Password,
 		DBName:   req.DBName,
 		SSLMode:  req.SSLMode,
+		Charset:  req.Charset,
 	}
 
 	s.logger.Info("Testing database connection",
+		"type", dbConfig.Type,
 		"host", dbConfig.Host,
 		"port", dbConfig.Port,
 		"dbname", dbConfig.DBName)
@@ -160,6 +175,72 @@ func (s *SetupAPI) handleTestConnection(c *gin.Context) {
 	})
 }
 
+// ListDatabasesRequest 列出数据库请求
+type ListDatabasesRequest struct {
+	Type     string `json:"type"`                     // postgres 或 mysql
+	Host     string `json:"host" binding:"required"`
+	Port     int    `json:"port" binding:"required"`
+	User     string `json:"user" binding:"required"`
+	Password string `json:"password"`
+	SSLMode  string `json:"sslmode"`                  // PostgreSQL 专用
+	Charset  string `json:"charset"`                  // MySQL 专用
+}
+
+// handleListDatabases 列出可用的数据库
+func (s *SetupAPI) handleListDatabases(c *gin.Context) {
+	var req ListDatabasesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	// 设置默认值
+	dbType := releasemodels.DBType(req.Type)
+	if dbType == "" {
+		dbType = releasemodels.DBTypePostgres
+	}
+	if req.SSLMode == "" {
+		req.SSLMode = "disable"
+	}
+	if req.Charset == "" {
+		req.Charset = "utf8mb4"
+	}
+
+	// 构建配置
+	dbConfig := &releasemodels.DatabaseConfig{
+		Type:     dbType,
+		Host:     req.Host,
+		Port:     req.Port,
+		User:     req.User,
+		Password: req.Password,
+		SSLMode:  req.SSLMode,
+		Charset:  req.Charset,
+	}
+
+	s.logger.Info("Listing databases",
+		"type", dbConfig.Type,
+		"host", dbConfig.Host,
+		"port", dbConfig.Port)
+
+	// 获取数据库列表
+	databases, err := releasemodels.ListDatabases(dbConfig)
+	if err != nil {
+		s.logger.Error("Failed to list databases", "error", err)
+		c.JSON(http.StatusOK, gin.H{
+			"success":   false,
+			"error":     fmt.Sprintf("Failed to list databases: %v", err),
+			"databases": []string{},
+		})
+		return
+	}
+
+	s.logger.Info("Listed databases", "count", len(databases))
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"databases": databases,
+	})
+}
+
 // handleInitialize 初始化数据库
 func (s *SetupAPI) handleInitialize(c *gin.Context) {
 	var req DatabaseConfig
@@ -169,27 +250,37 @@ func (s *SetupAPI) handleInitialize(c *gin.Context) {
 	}
 
 	// 设置默认值
+	dbType := releasemodels.DBType(req.Type)
+	if dbType == "" {
+		dbType = releasemodels.DBTypePostgres
+	}
 	if req.SSLMode == "" {
 		req.SSLMode = "disable"
+	}
+	if req.Charset == "" {
+		req.Charset = "utf8mb4"
 	}
 
 	// 构建配置
 	dbConfig := &releasemodels.DatabaseConfig{
+		Type:     dbType,
 		Host:     req.Host,
 		Port:     req.Port,
 		User:     req.User,
 		Password: req.Password,
 		DBName:   req.DBName,
 		SSLMode:  req.SSLMode,
+		Charset:  req.Charset,
 	}
 
 	s.logger.Info("Initializing database",
+		"type", dbConfig.Type,
 		"host", dbConfig.Host,
 		"port", dbConfig.Port,
 		"dbname", dbConfig.DBName)
 
-	// 连接数据库
-	db, err := releasemodels.InitDB(dbConfig)
+	// 连接数据库（如果不存在则自动创建）
+	db, err := releasemodels.InitDBWithCreate(dbConfig)
 	if err != nil {
 		s.logger.Error("Failed to connect to database", "error", err)
 		c.JSON(http.StatusOK, gin.H{
@@ -259,12 +350,14 @@ func (s *SetupAPI) saveConfig(dbConfig DatabaseConfig) error {
 
 	// 更新数据库配置
 	cfg.Database.Enabled = true
+	cfg.Database.Type = dbConfig.Type
 	cfg.Database.Host = dbConfig.Host
 	cfg.Database.Port = dbConfig.Port
 	cfg.Database.User = dbConfig.User
 	cfg.Database.Password = dbConfig.Password
 	cfg.Database.DBName = dbConfig.DBName
 	cfg.Database.SSLMode = dbConfig.SSLMode
+	cfg.Database.Charset = dbConfig.Charset
 	cfg.Database.AutoMigrate = dbConfig.AutoMigrate
 
 	// 确保目录存在
@@ -290,13 +383,21 @@ func (s *SetupAPI) TryAutoConnect(cfg *config.ServerConfig) error {
 		return fmt.Errorf("database not enabled in config")
 	}
 
+	// 确定数据库类型
+	dbType := releasemodels.DBType(cfg.Database.Type)
+	if dbType == "" {
+		dbType = releasemodels.DBTypePostgres
+	}
+
 	dbConfig := &releasemodels.DatabaseConfig{
+		Type:     dbType,
 		Host:     cfg.Database.Host,
 		Port:     cfg.Database.Port,
 		User:     cfg.Database.User,
 		Password: cfg.Database.Password,
 		DBName:   cfg.Database.DBName,
 		SSLMode:  cfg.Database.SSLMode,
+		Charset:  cfg.Database.Charset,
 	}
 
 	db, err := releasemodels.InitDB(dbConfig)
@@ -321,4 +422,111 @@ func (s *SetupAPI) TryAutoConnect(cfg *config.ServerConfig) error {
 	}
 
 	return nil
+}
+
+// handleListTables 列出数据库中的所有表
+func (s *SetupAPI) handleListTables(c *gin.Context) {
+	s.dbMu.RLock()
+	db := s.db
+	s.dbMu.RUnlock()
+
+	if db == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"error":   "Database not connected",
+			"tables":  []string{},
+		})
+		return
+	}
+
+	var tables []string
+	var currentDB string
+	dialectorName := db.Dialector.Name()
+
+	if dialectorName == "postgres" {
+		// 获取当前连接的数据库名
+		db.Raw("SELECT current_database()").Scan(&currentDB)
+
+		// PostgreSQL
+		rows, err := db.Raw(`
+			SELECT tablename FROM pg_tables
+			WHERE schemaname = 'public'
+			ORDER BY tablename
+		`).Rows()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"tables":  []string{},
+			})
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var tableName string
+			if err := rows.Scan(&tableName); err == nil {
+				tables = append(tables, tableName)
+			}
+		}
+	} else {
+		// MySQL - 获取当前数据库
+		db.Raw("SELECT DATABASE()").Scan(&currentDB)
+
+		rows, err := db.Raw("SHOW TABLES").Rows()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"error":   err.Error(),
+				"tables":  []string{},
+			})
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var tableName string
+			if err := rows.Scan(&tableName); err == nil {
+				tables = append(tables, tableName)
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":         true,
+		"tables":          tables,
+		"table_count":     len(tables),
+		"database_type":   dialectorName,
+		"current_database": currentDB,
+	})
+}
+
+// handleMigrate 手动触发数据库迁移
+func (s *SetupAPI) handleMigrate(c *gin.Context) {
+	s.dbMu.RLock()
+	db := s.db
+	s.dbMu.RUnlock()
+
+	if db == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"error":   "Database not connected",
+		})
+		return
+	}
+
+	s.logger.Info("Manual migration triggered")
+
+	if err := releasemodels.Migrate(db); err != nil {
+		s.logger.Error("Manual migration failed", "error", err)
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Migration failed: %v", err),
+		})
+		return
+	}
+
+	s.logger.Info("Manual migration completed successfully")
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Migration completed successfully",
+	})
 }

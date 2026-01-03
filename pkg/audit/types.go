@@ -46,10 +46,10 @@ type Config struct {
 	// Enabled controls whether auditing is active
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// StoreType specifies the storage backend ("file" or "sqlite")
+	// StoreType specifies the storage backend ("postgres", "sqlite", or "file")
 	StoreType string `yaml:"store_type" json:"store_type"`
 
-	// StorePath is the path to the storage file/database
+	// StorePath is the path to the storage file/database (for sqlite/file types)
 	StorePath string `yaml:"store_path" json:"store_path"`
 
 	// RetentionDays is how long to keep audit logs (0 = forever)
@@ -63,8 +63,8 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Enabled:          true,
-		StoreType:        "sqlite",
-		StorePath:        "data/audit.db",
+		StoreType:        "postgres",
+		StorePath:        "",
 		RetentionDays:    90,
 		MaxOutputCapture: 0, // Don't capture output by default
 	}

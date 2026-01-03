@@ -26,20 +26,33 @@
           label-width="120px"
           class="config-form"
         >
-          <el-form-item label="数据库类型">
-            <el-tag type="primary">PostgreSQL</el-tag>
+          <el-form-item label="数据库类型" prop="type">
+            <el-select v-model="dbConfig.type" style="width: 100%" @change="onDbTypeChange">
+              <el-option label="PostgreSQL" value="postgres">
+                <span style="display: flex; align-items: center; gap: 8px;">
+                  <el-icon><DataLine /></el-icon>
+                  PostgreSQL
+                </span>
+              </el-option>
+              <el-option label="MySQL" value="mysql">
+                <span style="display: flex; align-items: center; gap: 8px;">
+                  <el-icon><Coin /></el-icon>
+                  MySQL
+                </span>
+              </el-option>
+            </el-select>
           </el-form-item>
 
           <el-form-item label="主机地址" prop="host">
-            <el-input v-model="dbConfig.host" placeholder="localhost" />
+            <el-input v-model="dbConfig.host" placeholder="localhost" @blur="onConnectionInfoChange" />
           </el-form-item>
 
           <el-form-item label="端口" prop="port">
-            <el-input-number v-model="dbConfig.port" :min="1" :max="65535" />
+            <el-input-number v-model="dbConfig.port" :min="1" :max="65535" @change="onConnectionInfoChange" />
           </el-form-item>
 
           <el-form-item label="用户名" prop="user">
-            <el-input v-model="dbConfig.user" placeholder="postgres" />
+            <el-input v-model="dbConfig.user" placeholder="postgres" @blur="onConnectionInfoChange" />
           </el-form-item>
 
           <el-form-item label="密码" prop="password">
@@ -48,19 +61,49 @@
               type="password"
               placeholder="输入密码"
               show-password
+              @blur="onConnectionInfoChange"
             />
           </el-form-item>
 
           <el-form-item label="数据库名" prop="dbname">
-            <el-input v-model="dbConfig.dbname" placeholder="quic_release" />
+            <el-select
+              v-model="dbConfig.dbname"
+              style="width: 100%"
+              filterable
+              allow-create
+              default-first-option
+              :loading="loadingDatabases"
+              placeholder="选择或输入数据库名"
+            >
+              <el-option
+                v-for="db in availableDatabases"
+                :key="db"
+                :label="db"
+                :value="db"
+              />
+            </el-select>
+            <div v-if="dbNameWarning" class="db-name-warning">
+              <el-icon><Warning /></el-icon>
+              <span>{{ dbNameWarning }}</span>
+            </div>
           </el-form-item>
 
-          <el-form-item label="SSL 模式" prop="sslmode">
+          <!-- PostgreSQL 专用: SSL 模式 -->
+          <el-form-item v-if="dbConfig.type === 'postgres'" label="SSL 模式" prop="sslmode">
             <el-select v-model="dbConfig.sslmode" style="width: 100%">
               <el-option label="禁用 (disable)" value="disable" />
               <el-option label="要求 (require)" value="require" />
               <el-option label="验证 CA (verify-ca)" value="verify-ca" />
               <el-option label="完全验证 (verify-full)" value="verify-full" />
+            </el-select>
+          </el-form-item>
+
+          <!-- MySQL 专用: 字符集 -->
+          <el-form-item v-if="dbConfig.type === 'mysql'" label="字符集" prop="charset">
+            <el-select v-model="dbConfig.charset" style="width: 100%">
+              <el-option label="utf8mb4 (推荐)" value="utf8mb4" />
+              <el-option label="utf8" value="utf8" />
+              <el-option label="latin1" value="latin1" />
             </el-select>
           </el-form-item>
 
@@ -71,6 +114,10 @@
         </el-form>
 
         <div class="step-actions">
+          <el-button @click="fetchDatabases" :loading="loadingDatabases">
+            <el-icon><Refresh /></el-icon>
+            刷新数据库列表
+          </el-button>
           <el-button type="primary" @click="goToStep(1)" :loading="testing">
             下一步
             <el-icon class="el-icon--right"><ArrowRight /></el-icon>
@@ -83,10 +130,25 @@
         <div class="test-section">
           <div class="test-info">
             <el-descriptions :column="1" border>
+              <el-descriptions-item label="数据库类型">
+                <el-tag :type="dbConfig.type === 'postgres' ? 'primary' : 'success'">
+                  {{ dbConfig.type === 'postgres' ? 'PostgreSQL' : 'MySQL' }}
+                </el-tag>
+              </el-descriptions-item>
               <el-descriptions-item label="主机">{{ dbConfig.host }}:{{ dbConfig.port }}</el-descriptions-item>
               <el-descriptions-item label="用户名">{{ dbConfig.user }}</el-descriptions-item>
-              <el-descriptions-item label="数据库">{{ dbConfig.dbname }}</el-descriptions-item>
-              <el-descriptions-item label="SSL 模式">{{ dbConfig.sslmode }}</el-descriptions-item>
+              <el-descriptions-item label="数据库">
+                {{ dbConfig.dbname }}
+                <el-tag v-if="!isDatabaseExists" type="warning" size="small" style="margin-left: 8px;">
+                  新建
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="dbConfig.type === 'postgres'" label="SSL 模式">
+                {{ dbConfig.sslmode }}
+              </el-descriptions-item>
+              <el-descriptions-item v-if="dbConfig.type === 'mysql'" label="字符集">
+                {{ dbConfig.charset }}
+              </el-descriptions-item>
             </el-descriptions>
           </div>
 
@@ -236,11 +298,12 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Coin, ArrowRight, ArrowLeft, Connection, SetUp, House, Upload
+  Coin, ArrowRight, ArrowLeft, Connection, SetUp, House, Upload,
+  DataLine, Warning, Refresh
 } from '@element-plus/icons-vue'
 import { request } from '@/api'
 
@@ -252,17 +315,40 @@ const configFormRef = ref(null)
 
 // 数据库配置
 const dbConfig = reactive({
+  type: 'postgres',
   host: 'localhost',
   port: 5432,
   user: 'postgres',
   password: '',
   dbname: 'quic_release',
   sslmode: 'disable',
+  charset: 'utf8mb4',
   auto_migrate: true
+})
+
+// 可用数据库列表
+const availableDatabases = ref([])
+const loadingDatabases = ref(false)
+
+// 数据库名警告
+const dbNameWarning = computed(() => {
+  if (!dbConfig.dbname) return ''
+  if (availableDatabases.value.length === 0) return ''
+  if (!availableDatabases.value.includes(dbConfig.dbname)) {
+    return `数据库 "${dbConfig.dbname}" 在服务器中不存在，将会自动创建`
+  }
+  return ''
+})
+
+// 数据库是否存在
+const isDatabaseExists = computed(() => {
+  if (availableDatabases.value.length === 0) return true // 未获取列表时假设存在
+  return availableDatabases.value.includes(dbConfig.dbname)
 })
 
 // 表单验证规则
 const configRules = {
+  type: [{ required: true, message: '请选择数据库类型', trigger: 'change' }],
   host: [{ required: true, message: '请输入主机地址', trigger: 'blur' }],
   port: [{ required: true, message: '请输入端口', trigger: 'blur' }],
   user: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -397,6 +483,72 @@ function goToMain() {
 function goToRelease() {
   router.push('/release')
 }
+
+// 数据库类型改变
+function onDbTypeChange(type) {
+  // 根据类型设置默认端口
+  if (type === 'postgres') {
+    dbConfig.port = 5432
+    dbConfig.user = 'postgres'
+  } else if (type === 'mysql') {
+    dbConfig.port = 3306
+    dbConfig.user = 'root'
+  }
+  // 清空数据库列表
+  availableDatabases.value = []
+  // 尝试获取新的数据库列表
+  fetchDatabases()
+}
+
+// 连接信息改变时
+function onConnectionInfoChange() {
+  // 清空数据库列表，提示用户刷新
+  availableDatabases.value = []
+}
+
+// 获取可用数据库列表
+async function fetchDatabases() {
+  if (!dbConfig.host || !dbConfig.port || !dbConfig.user) {
+    return
+  }
+
+  loadingDatabases.value = true
+  try {
+    const res = await request.post('/setup/list-databases', {
+      type: dbConfig.type,
+      host: dbConfig.host,
+      port: dbConfig.port,
+      user: dbConfig.user,
+      password: dbConfig.password,
+      sslmode: dbConfig.sslmode,
+      charset: dbConfig.charset
+    })
+    if (res.success) {
+      availableDatabases.value = res.databases || []
+      if (res.databases?.length > 0) {
+        ElMessage.success(`获取到 ${res.databases.length} 个数据库`)
+      } else {
+        ElMessage.info('未找到用户数据库')
+      }
+    } else {
+      availableDatabases.value = []
+      ElMessage.warning(res.error || '获取数据库列表失败')
+    }
+  } catch (e) {
+    availableDatabases.value = []
+    ElMessage.error('获取数据库列表失败: ' + e.message)
+  } finally {
+    loadingDatabases.value = false
+  }
+}
+
+// 组件挂载时尝试获取数据库列表
+onMounted(() => {
+  // 延迟获取，等待可能的配置加载
+  setTimeout(() => {
+    fetchDatabases()
+  }, 500)
+})
 </script>
 
 <style scoped>
@@ -524,5 +676,22 @@ function goToRelease() {
 
 .config-saved {
   margin-top: 24px;
+}
+
+.db-name-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background-color: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 4px;
+  color: #e6a23c;
+  font-size: 12px;
+}
+
+.db-name-warning .el-icon {
+  flex-shrink: 0;
 }
 </style>

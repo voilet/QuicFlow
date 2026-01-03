@@ -229,13 +229,20 @@ func runServer(cmd *cobra.Command, args []string) {
 	httpServer.AddSSHRoutes(sshAPIAdapter)
 	logger.Info("SSH client manager created")
 
-	// 创建审计存储（每个会话一个文件）
-	auditStore, err := audit.NewSessionFileStore("data/audit")
-	if err != nil {
-		logger.Error("Failed to create audit store", "error", err)
-		os.Exit(1)
+	// 创建审计存储（使用 PostgreSQL）
+	var auditStore audit.Store
+	if releaseDB != nil {
+		var err error
+		auditStore, err = audit.NewPostgresStore(releaseDB)
+		if err != nil {
+			logger.Error("Failed to create PostgreSQL audit store", "error", err)
+		} else {
+			logger.Info("Audit store created (PostgreSQL)")
+		}
 	}
-	logger.Info("Audit store created", "path", "data/audit")
+	if auditStore == nil {
+		logger.Warn("Audit store not available, will be initialized when database is ready")
+	}
 
 	// 创建录像存储
 	recordingStore, err := recording.NewStore("data/recordings")
@@ -244,6 +251,18 @@ func runServer(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	logger.Info("Recording store created", "path", "data/recordings")
+
+	// 创建录像数据库存储（如果数据库可用）
+	var recordingDBStore *recording.DBStore
+	if releaseDB != nil {
+		var err error
+		recordingDBStore, err = recording.NewDBStore(releaseDB)
+		if err != nil {
+			logger.Error("Failed to create recording database store", "error", err)
+		} else {
+			logger.Info("Recording database store created")
+		}
+	}
 
 	// 创建录像配置
 	recordingConfig := &recording.Config{
@@ -255,6 +274,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 创建终端管理器（WebSocket SSH 终端）带审计和录像
 	terminalAdapter := NewSSHTerminalAdapter(sshManager)
 	terminalManager := api.NewTerminalManagerWithRecording(terminalAdapter, logger, auditStore, recordingConfig)
+	if recordingDBStore != nil {
+		terminalManager.SetRecordingDBStore(recordingDBStore)
+	}
 	httpServer.AddTerminalRoutes(terminalManager)
 	logger.Info("Terminal WebSocket routes added")
 
@@ -264,17 +286,40 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// 添加录像 API 路由
 	recordingAPI := api.NewRecordingAPI(recordingStore, logger)
+	if recordingDBStore != nil {
+		recordingAPI.SetDBStore(recordingDBStore)
+	}
 	httpServer.AddRecordingRoutes(recordingAPI)
 
 	// 添加发布系统 API 路由
 	releaseAPI := releaseapi.NewReleaseAPIWithRemote(releaseDB, commandManager)
 	httpServer.AddReleaseRoutes(releaseAPI)
 
-	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API
+	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit store
 	setupAPI.SetOnDBReady(func(db *gorm.DB) {
 		releaseAPI.SetDB(db)
 		releaseAPI.SetRemoteExecutor(commandManager)
 		logger.Info("Release API database updated via setup")
+
+		// 创建 PostgreSQL audit store 并更新相关组件
+		newAuditStore, err := audit.NewPostgresStore(db)
+		if err != nil {
+			logger.Error("Failed to create PostgreSQL audit store", "error", err)
+			return
+		}
+		auditAPI.SetStore(newAuditStore)
+		terminalManager.SetAuditStore(newAuditStore)
+		logger.Info("Audit store updated to PostgreSQL via setup")
+
+		// 创建录制数据库存储并更新终端管理器和API
+		newRecordingDBStore, err := recording.NewDBStore(db)
+		if err != nil {
+			logger.Error("Failed to create recording database store", "error", err)
+		} else {
+			terminalManager.SetRecordingDBStore(newRecordingDBStore)
+			recordingAPI.SetDBStore(newRecordingDBStore)
+			logger.Info("Recording database store updated via setup")
+		}
 	})
 
 	if releaseDB != nil {
@@ -309,7 +354,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		batchExecutor.Stop()
 	}
 	sshManager.Close()
-	auditStore.Close()
+	if auditStore != nil {
+		auditStore.Close()
+	}
 	shutdownServer(logger, disp, httpServer, srv)
 }
 
@@ -470,13 +517,21 @@ func shutdownServer(logger *monitoring.Logger, disp *dispatcher.Dispatcher, http
 
 // initDatabase 初始化数据库连接
 func initDatabase(cfg *config.ServerConfig, logger *monitoring.Logger) (*gorm.DB, error) {
+	// 确定数据库类型
+	dbType := releasemodels.DBType(cfg.Database.Type)
+	if dbType == "" {
+		dbType = releasemodels.DBTypePostgres
+	}
+
 	dbConfig := &releasemodels.DatabaseConfig{
+		Type:     dbType,
 		Host:     cfg.Database.Host,
 		Port:     cfg.Database.Port,
 		User:     cfg.Database.User,
 		Password: cfg.Database.Password,
 		DBName:   cfg.Database.DBName,
 		SSLMode:  cfg.Database.SSLMode,
+		Charset:  cfg.Database.Charset,
 	}
 
 	logger.Info("Connecting to database",
