@@ -13,6 +13,7 @@ import (
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/hardware"
 	"github.com/voilet/quic-flow/pkg/monitoring"
+	"github.com/voilet/quic-flow/pkg/profiling"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/session"
 )
@@ -168,10 +169,11 @@ type ClientDetail struct {
 
 // ListClientsResponse 客户端列表响应
 type ListClientsResponse struct {
-	Total   int64          `json:"total"`
-	Offset  int            `json:"offset,omitempty"`
-	Limit   int            `json:"limit,omitempty"`
-	Clients []ClientDetail `json:"clients"`
+	Total        int64          `json:"total"`
+	OnlineCount  int64          `json:"online_count"`  // 心跳在线数量
+	Offset       int            `json:"offset,omitempty"`
+	Limit        int            `json:"limit,omitempty"`
+	Clients      []ClientDetail `json:"clients"`
 }
 
 // handleListClients 处理获取客户端列表请求
@@ -198,15 +200,18 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 	// 解析状态筛选
 	statusFilter := c.Query("status") // online, offline, all
 
-	// 获取当前在线的客户端（用于标记在线状态）
+	// 获取当前在线的客户端（用于填充会话信息）
 	onlineClients := make(map[string]session.ClientInfoBrief)
 	for _, client := range h.serverAPI.ListClientsWithDetails() {
 		onlineClients[client.ClientID] = client
 	}
 
 	now := time.Now()
+	const heartbeatTimeout = 5 * time.Minute // 心跳超时时间
+
 	var details []ClientDetail
 	var total int64
+	var onlineCount int64 // 在线节点计数
 
 	// 如果有 hardware store，从数据库获取设备信息
 	if h.hardwareStore != nil {
@@ -223,15 +228,31 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 			devices, total, err = h.hardwareStore.ListDevices(offset, limit)
 		}
 
+		// 用于记录已在数据库中的客户端ID
+		dbClientIDs := make(map[string]bool)
+
 		if err == nil {
 			details = make([]ClientDetail, len(devices))
 			for i, device := range devices {
-				// 在线状态由实际会话决定（如果存在会话则在线，否则使用数据库状态）
-				onlineClient, hasSession := onlineClients[device.ClientID]
-				actualStatus := device.Status
-				if hasSession {
-					actualStatus = "online"
+				dbClientIDs[device.ClientID] = true
+
+				// 基于心跳判断在线状态：最后心跳时间在超时时间内
+				isOnline := false
+				if device.LastSeenAt != nil {
+					isOnline = now.Sub(*device.LastSeenAt) < heartbeatTimeout
 				}
+
+				// 如果当前有活跃会话，强制标记为在线
+				if _, hasSession := onlineClients[device.ClientID]; hasSession {
+					isOnline = true
+				}
+
+				if isOnline {
+					onlineCount++
+				}
+
+				// 获取当前会话信息（如果在线）
+				onlineClient, hasSession := onlineClients[device.ClientID]
 
 				detail := ClientDetail{
 					ClientID:     device.ClientID,
@@ -243,8 +264,8 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 					MemoryGB:     device.MemoryTotalGB,
 					DiskTB:       device.DiskTotalTB,
 					PrimaryMAC:   device.PrimaryMAC,
-					Online:       hasSession, // 有会话才是真正在线
-					Status:       actualStatus, // 实际状态
+					Online:       isOnline, // 基于心跳判断
+					Status:       device.Status,
 					FirstSeenAt:  device.FirstSeenAt.UnixMilli(),
 				}
 
@@ -253,7 +274,7 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 					detail.CPUCores = device.FullHardwareInfo.CPUCoreCount
 				}
 
-				// 如果当前在线，填充会话信息
+				// 如果有当前会话，填充会话信息
 				if hasSession {
 					detail.RemoteAddr = onlineClient.RemoteAddr
 					detail.ConnectedAt = onlineClient.ConnectedAt
@@ -270,6 +291,25 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 				details[i] = detail
 			}
 		}
+
+		// 将当前在线但不在数据库中的客户端也加入结果
+		for clientID, onlineClient := range onlineClients {
+			if !dbClientIDs[clientID] {
+				// 这个客户端在线但不在数据库中，可能是新连接的
+				uptime := now.Sub(time.UnixMilli(onlineClient.ConnectedAt))
+				detail := ClientDetail{
+					ClientID:    clientID,
+					Online:      true,
+					Status:      "online",
+					RemoteAddr:  onlineClient.RemoteAddr,
+					ConnectedAt: onlineClient.ConnectedAt,
+					Uptime:      uptime.Round(time.Second).String(),
+				}
+				details = append(details, detail)
+				onlineCount++
+				total++ // 增加总数
+			}
+		}
 	} else {
 		// 没有 database，只返回当前在线的客户端
 		var clients []session.ClientInfoBrief
@@ -281,6 +321,7 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 			total = int64(len(clients))
 		}
 
+		onlineCount = total
 		details = make([]ClientDetail, len(clients))
 		for i, client := range clients {
 			uptime := now.Sub(time.UnixMilli(client.ConnectedAt))
@@ -296,8 +337,9 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 	}
 
 	response := ListClientsResponse{
-		Total:   total,
-		Clients: details,
+		Total:       total,
+		OnlineCount: onlineCount,
+		Clients:     details,
 	}
 
 	// 只在分页时返回分页信息
@@ -305,6 +347,9 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 		response.Offset = offset
 		response.Limit = limit
 	}
+
+	// 添加在线节点数到响应头
+	c.Header("X-Online-Count", fmt.Sprintf("%d", onlineCount))
 
 	c.JSON(http.StatusOK, response)
 }
@@ -750,6 +795,19 @@ func (h *HTTPServer) AddSetupRoutes(setupAPI *SetupAPI) {
 	api := h.router.Group("/api")
 	setupAPI.RegisterRoutes(api)
 	h.logger.Info("Setup API routes added")
+}
+
+// AddProfilingRoutes 添加性能分析路由
+func (h *HTTPServer) AddProfilingRoutes(profilingHandler *profiling.Handler) {
+	api := h.router.Group("/api")
+	profilingHandler.RegisterRoutes(api)
+	h.logger.Info("Profiling API routes added")
+}
+
+// AddStandardProfilingRoutes 添加标准 pprof 路由（兼容 go tool pprof）
+func (h *HTTPServer) AddStandardProfilingRoutes(stdHandler *profiling.StandardHandler) {
+	stdHandler.RegisterRoutes(h.router)
+	h.logger.Info("Standard pprof routes added at /debug/pprof/")
 }
 
 // ContainerLogsRequest 查看容器日志请求

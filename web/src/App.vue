@@ -42,6 +42,10 @@
           <el-icon><Upload /></el-icon>
           <span>发布管理</span>
         </el-menu-item>
+        <el-menu-item index="/profiling">
+          <el-icon><TrendCharts /></el-icon>
+          <span>性能分析</span>
+        </el-menu-item>
         <el-menu-item index="/setup" class="setup-menu-item">
           <el-icon><Setting /></el-icon>
           <span>数据库设置</span>
@@ -67,6 +71,34 @@
               <el-icon><component :is="dbStatus.icon" /></el-icon>
               {{ dbStatus.text }}
             </el-tag>
+
+            <!-- 用户信息 -->
+            <el-dropdown v-if="userStore.isLoggedIn" @command="handleUserCommand">
+              <div class="user-info">
+                <el-icon class="user-icon"><User /></el-icon>
+                <span class="user-name">{{ userStore.displayName }}</span>
+                <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
+              </div>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item disabled>
+                    <span class="user-detail">
+                      <el-icon><User /></el-icon>
+                      {{ userStore.userInfo?.username }}
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item disabled v-if="userStore.userInfo?.email">
+                    <span class="user-detail">
+                      <el-icon><Message /></el-icon>
+                      {{ userStore.userInfo?.email }}
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item divided :icon="SwitchButton" command="logout">
+                    退出登录
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </el-header>
@@ -85,11 +117,15 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { User, ArrowDown, Message, SwitchButton, TrendCharts } from '@element-plus/icons-vue'
+import { useUserStore } from '@/stores/user'
 import { request } from '@/api'
-import { Sunny, Moon } from '@element-plus/icons-vue'
 
 const route = useRoute()
+const router = useRouter()
+const userStore = useUserStore()
 
 // 主题管理
 const theme = ref(localStorage.getItem('theme') || 'light')
@@ -116,6 +152,7 @@ const pageTitle = computed(() => {
     '/audit': '命令审计',
     '/recordings': '会话录像',
     '/release': '发布管理',
+    '/profiling': '性能分析',
     '/setup': '数据库设置'
   }
   return titles[route.path] || 'Pantheon Quic　管理系统'
@@ -130,6 +167,29 @@ const dbStatus = computed(() => {
     return { type: 'warning', text: '数据库未配置', icon: 'WarningFilled' }
   }
 })
+
+// 用户操作处理
+async function handleUserCommand(command) {
+  switch (command) {
+    case 'logout':
+      try {
+        await ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        })
+        await userStore.logout()
+        ElMessage.success('已退出登录')
+        router.push('/login')
+      } catch (error) {
+        // 用户取消或登出失败
+        if (error !== 'cancel') {
+          console.error('Logout error:', error)
+        }
+      }
+      break
+  }
+}
 
 // 检查数据库状态
 async function checkDatabaseStatus() {
@@ -388,6 +448,51 @@ onMounted(() => {
   border-radius: 4px;
   font-weight: 500;
 }
+
+/* 用户信息下拉菜单样式 */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: var(--tech-bg-card);
+  border: 1px solid var(--tech-border);
+}
+
+.user-info:hover {
+  background: var(--tech-bg-glass);
+  border-color: var(--tech-primary);
+}
+
+.user-icon {
+  font-size: 18px;
+  color: var(--tech-primary);
+}
+
+.user-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--tech-text-primary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-icon {
+  font-size: 12px;
+  color: var(--tech-text-secondary);
+}
+
+.user-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 
 .app-main {
   background: var(--tech-bg-primary);

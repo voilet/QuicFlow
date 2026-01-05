@@ -1,23 +1,159 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
+// Token 管理
+const TOKEN_KEY = 'x-token'
+
+export const getToken = () => {
+  return localStorage.getItem(TOKEN_KEY) || document.cookie.match(new RegExp(`(^| )${TOKEN_KEY}=([^;]*)(;|$)`))?.[2] || ''
+}
+
+export const setToken = (token) => {
+  localStorage.setItem(TOKEN_KEY, token)
+  document.cookie = `${TOKEN_KEY}=${token};path=/`
+}
+
+export const removeToken = () => {
+  localStorage.removeItem(TOKEN_KEY)
+  document.cookie = `${TOKEN_KEY}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`
+}
+
 // 创建 axios 实例
 const request = axios.create({
   baseURL: '/api',
   timeout: 30000
 })
 
+// 请求拦截器
+request.interceptors.request.use(
+  config => {
+    const token = getToken()
+    if (token) {
+      config.headers['x-token'] = token
+    }
+    return config
+  },
+  error => {
+    return Promise.reject(error)
+  }
+)
+
 // 响应拦截器
 request.interceptors.response.use(
-  response => response.data,
+  response => {
+    // 处理新 token
+    const newToken = response.headers['new-token']
+    if (newToken) {
+      setToken(newToken)
+    }
+    return response.data
+  },
   error => {
-    ElMessage.error(error.message || '请求失败')
+    if (error.response) {
+      const { status } = error.response
+      if (status === 401) {
+        removeToken()
+        window.location.href = '/login'
+      }
+      ElMessage.error(error.response.data?.msg || error.message || '请求失败')
+    } else {
+      ElMessage.error(error.message || '请求失败')
+    }
     return Promise.reject(error)
   }
 )
 
 // API 接口
 export const api = {
+  // ===== 认证 API =====
+
+  // 用户登录
+  login(data) {
+    return request.post('/base/login', data)
+  },
+
+  // 用户登出
+  logout() {
+    return request.post('/user/logout')
+  },
+
+  // 获取当前用户信息
+  getUserInfo() {
+    return request.get('/user/info')
+  },
+
+  // 修改密码
+  changePassword(data) {
+    return request.put('/user/password', data)
+  },
+
+  // 用户管理（管理员）
+  getUserList(params) {
+    return request.get('/user/list', { params })
+  },
+
+  createUser(data) {
+    return request.post('/user/create', data)
+  },
+
+  updateUser(data) {
+    return request.put('/user/update', data)
+  },
+
+  deleteUser(id) {
+    return request.delete('/user/delete', { params: { id } })
+  },
+
+  resetPassword(data) {
+    return request.put('/user/reset-password', data)
+  },
+
+  // 角色管理（管理员）
+  getAuthorityList() {
+    return request.get('/authority/list')
+  },
+
+  createAuthority(data) {
+    return request.post('/authority/create', data)
+  },
+
+  updateAuthority(data) {
+    return request.put('/authority/update', data)
+  },
+
+  deleteAuthority(id) {
+    return request.delete('/authority/delete', { params: { id } })
+  },
+
+  copyAuthority(data) {
+    return request.post('/authority/copy', data)
+  },
+
+  // 菜单管理（管理员）
+  getMenuList() {
+    return request.get('/menu/list')
+  },
+
+  createMenu(data) {
+    return request.post('/menu/create', data)
+  },
+
+  updateMenu(data) {
+    return request.put('/menu/update', data)
+  },
+
+  deleteMenu(id) {
+    return request.delete('/menu/delete', { params: { id } })
+  },
+
+  getMenuByAuthority(authorityId) {
+    return request.get('/menu/by-authority', { params: { authority_id: authorityId } })
+  },
+
+  setMenuAuthority(data) {
+    return request.post('/menu/set-authority', data)
+  },
+
   // 客户端管理
   getClients(params = {}) {
     return request.get('/clients', { params })
@@ -30,6 +166,63 @@ export const api = {
   // 获取客户端硬件信息（从数据库）
   getClientHardwareInfo(clientId) {
     return request.get(`/hardware/devices/${clientId}/hardware`)
+  },
+
+  // ===== 硬件设备管理 API =====
+
+  // 获取设备列表
+  getDevices(params = {}) {
+    return request.get('/hardware/devices', { params })
+  },
+
+  // 获取单个设备
+  getDevice(clientId) {
+    return request.get(`/hardware/devices/${clientId}`)
+  },
+
+  // 获取设备统计
+  getDeviceStats() {
+    return request.get('/hardware/devices/stats')
+  },
+
+  // 按主机名搜索设备
+  searchDevicesByHostname(keyword, params = {}) {
+    return request.get('/hardware/devices/search/by-hostname', { params: { q: keyword, ...params } })
+  },
+
+  // 批量查询设备（按 client_id 列表）
+  batchQueryDevices(clientIds) {
+    return request.post('/hardware/devices/batch-query', { client_ids: clientIds })
+  },
+
+  // 批量删除设备
+  batchDeleteDevices(clientIds) {
+    return request.post('/hardware/devices/batch-delete', { client_ids: clientIds })
+  },
+
+  // 批量更新设备状态
+  batchUpdateDeviceStatus(clientIds, status) {
+    return request.post('/hardware/devices/batch-update-status', { client_ids: clientIds, status })
+  },
+
+  // 删除单个设备
+  deleteDevice(clientId) {
+    return request.delete(`/hardware/devices/${clientId}`)
+  },
+
+  // 更新设备状态
+  updateDeviceStatus(clientId, status) {
+    return request.put(`/hardware/devices/${clientId}/status`, { status })
+  },
+
+  // 获取设备历史
+  getDeviceHistory(clientId, limit = 50) {
+    return request.get(`/hardware/devices/${clientId}/history`, { params: { limit } })
+  },
+
+  // 标记离线设备
+  markOfflineDevices(timeoutMinutes) {
+    return request.post('/hardware/devices/mark-offline', { timeout_minutes: timeoutMinutes })
   },
 
   // 消息发送
@@ -537,6 +730,70 @@ export const api = {
   // 获取容器日志（一次性获取）
   getContainerLogs(data) {
     return request.post('/containers/logs', data)
+  },
+
+  // ===== 性能分析 API =====
+
+  // 启动 CPU 采集
+  startCPUProfile(data) {
+    return request.post('/profiling/cpu', data)
+  },
+
+  // 上传已采集的 CPU profile（用于标准 pprof 端点采集的数据）
+  uploadCPUProfile(formData) {
+    return request.post('/profiling/cpu/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+
+  // 采集内存快照
+  captureMemoryProfile(data) {
+    return request.post('/profiling/memory', data)
+  },
+
+  // 采集 Goroutine 快照
+  captureGoroutineProfile(data) {
+    return request.post('/profiling/goroutine', data)
+  },
+
+  // 获取采集列表
+  getProfiles(params = {}) {
+    return request.get('/profiling/list', { params })
+  },
+
+  // 获取单个采集
+  getProfile(id) {
+    return request.get(`/profiling/profiles/${id}`)
+  },
+
+  // 获取火焰图 URL
+  getFlameGraphUrl(id) {
+    return `/api/profiling/flamegraph/${id}`
+  },
+
+  // 生成火焰图
+  generateFlameGraph(id) {
+    return request.post(`/profiling/flamegraph/${id}/generate`)
+  },
+
+  // 分析采集
+  analyzeProfile(id) {
+    return request.post(`/profiling/analyze/${id}`)
+  },
+
+  // 删除采集
+  deleteProfile(id) {
+    return request.delete(`/profiling/profiles/${id}`)
+  },
+
+  // 清理旧采集
+  cleanupProfiles(days = 7) {
+    return request.post('/profiling/cleanup', null, { params: { days } })
+  },
+
+  // 下载采集文件
+  downloadProfile(id) {
+    return `/api/profiling/profiles/${id}/download`
   },
 
   /**

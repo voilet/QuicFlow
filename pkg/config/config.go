@@ -55,6 +55,10 @@ type TLSSettings struct {
 	CertFile string `mapstructure:"cert_file"`
 	// 私钥文件路径
 	KeyFile string `mapstructure:"key_file"`
+	// Session Ticket 密钥（逗号分隔）
+	SessionTicketKeys string `mapstructure:"session_ticket_keys"`
+	// 密钥轮换间隔（小时）
+	KeyRotationInterval int `mapstructure:"key_rotation_interval"`
 }
 
 // QUICSettings QUIC 协议设置
@@ -73,6 +77,8 @@ type QUICSettings struct {
 	InitialConnectionReceiveWindow uint64 `mapstructure:"initial_connection_receive_window"`
 	// 最大连接接收窗口（字节）
 	MaxConnectionReceiveWindow uint64 `mapstructure:"max_connection_receive_window"`
+	// 启用 0-RTT（减少连接延迟）
+	Allow0RTT bool `mapstructure:"allow_0rtt"`
 }
 
 // SessionSettings 会话管理设置
@@ -151,6 +157,19 @@ type DatabaseSettings struct {
 	Charset string `mapstructure:"charset"`
 	// 是否自动迁移表结构
 	AutoMigrate bool `mapstructure:"auto_migrate"`
+	// GORM 日志级别: silent, error, warn, info
+	// silent: 禁用所有日志（生产环境推荐）
+	// error: 仅错误日志
+	// warn: 警告和错误日志
+	// info: 详细 SQL 日志（开发调试用）
+	LogLevel string `mapstructure:"log_level"`
+	// ========== 连接池配置 ==========
+	// 最大空闲连接数
+	MaxIdleConns int `mapstructure:"max_idle_conns"`
+	// 最大打开连接数
+	MaxOpenConns int `mapstructure:"max_open_conns"`
+	// 连接最大存活时间（秒）
+	ConnMaxLifetime int `mapstructure:"conn_max_lifetime"`
 }
 
 // DefaultConfig 返回默认配置
@@ -163,8 +182,10 @@ func DefaultConfig() *ServerConfig {
 			MaxClients: 10000,
 		},
 		TLS: TLSSettings{
-			CertFile: "certs/server-cert.pem",
-			KeyFile:  "certs/server-key.pem",
+			CertFile:            "certs/server-cert.pem",
+			KeyFile:             "certs/server-key.pem",
+			SessionTicketKeys:    "",
+			KeyRotationInterval: 24,
 		},
 		QUIC: QUICSettings{
 			MaxIdleTimeout:                 60,
@@ -174,6 +195,7 @@ func DefaultConfig() *ServerConfig {
 			MaxStreamReceiveWindow:         6 * 1024 * 1024, // 6MB
 			InitialConnectionReceiveWindow: 1024 * 1024,     // 1MB
 			MaxConnectionReceiveWindow:     15 * 1024 * 1024, // 15MB
+			Allow0RTT:                      true,
 		},
 		Session: SessionSettings{
 			HeartbeatInterval:      15,
@@ -203,16 +225,20 @@ func DefaultConfig() *ServerConfig {
 			File:   "",
 		},
 		Database: DatabaseSettings{
-			Enabled:     true,
-			Type:        "postgres",
-			Host:        "localhost",
-			Port:        5432,
-			User:        "postgres",
-			Password:    "postgres",
-			DBName:      "quic_release",
-			SSLMode:     "disable",
-			Charset:     "utf8mb4",
-			AutoMigrate: true,
+			Enabled:        true,
+			Type:           "postgres",
+			Host:           "localhost",
+			Port:           5432,
+			User:           "postgres",
+			Password:       "postgres",
+			DBName:         "quic_release",
+			SSLMode:        "disable",
+			Charset:        "utf8mb4",
+			AutoMigrate:    true,
+			LogLevel:       "silent", // 默认关闭 GORM 日志，避免高并发下的性能问题
+			MaxIdleConns:   10,
+			MaxOpenConns:   100,
+			ConnMaxLifetime: 3600, // 1 小时
 		},
 	}
 }
@@ -326,6 +352,8 @@ func setDefaults(v *viper.Viper) {
 	// TLS
 	v.SetDefault("tls.cert_file", defaults.TLS.CertFile)
 	v.SetDefault("tls.key_file", defaults.TLS.KeyFile)
+	v.SetDefault("tls.session_ticket_keys", defaults.TLS.SessionTicketKeys)
+	v.SetDefault("tls.key_rotation_interval", defaults.TLS.KeyRotationInterval)
 
 	// QUIC
 	v.SetDefault("quic.max_idle_timeout", defaults.QUIC.MaxIdleTimeout)
@@ -335,6 +363,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("quic.max_stream_receive_window", defaults.QUIC.MaxStreamReceiveWindow)
 	v.SetDefault("quic.initial_connection_receive_window", defaults.QUIC.InitialConnectionReceiveWindow)
 	v.SetDefault("quic.max_connection_receive_window", defaults.QUIC.MaxConnectionReceiveWindow)
+	v.SetDefault("quic.allow_0rtt", defaults.QUIC.Allow0RTT)
 
 	// Session
 	v.SetDefault("session.heartbeat_interval", defaults.Session.HeartbeatInterval)
@@ -374,6 +403,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.sslmode", defaults.Database.SSLMode)
 	v.SetDefault("database.charset", defaults.Database.Charset)
 	v.SetDefault("database.auto_migrate", defaults.Database.AutoMigrate)
+	v.SetDefault("database.log_level", defaults.Database.LogLevel)
+	v.SetDefault("database.max_idle_conns", defaults.Database.MaxIdleConns)
+	v.SetDefault("database.max_open_conns", defaults.Database.MaxOpenConns)
+	v.SetDefault("database.conn_max_lifetime", defaults.Database.ConnMaxLifetime)
 }
 
 // GenerateDefaultConfig 生成默认配置文件

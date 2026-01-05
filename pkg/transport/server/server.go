@@ -125,6 +125,13 @@ func (s *Server) Start(listenAddr string) error {
 	s.running = true
 	s.mu.Unlock()
 
+	// ========== 性能优化：0-RTT 和会话恢复 ==========
+	// 当 Allow0RTT 启用时，QUIC 会自动处理 session tickets
+	// 重复连接可以跳过完整的 TLS 握手，显著降低延迟
+	if s.config.Allow0RTT {
+		s.logger.Info("0-RTT enabled for faster connection resumption")
+	}
+
 	// 启动监听
 	listener, err := quic.ListenAddr(listenAddr, s.tlsCfg, s.quicCfg)
 	if err != nil {
@@ -132,7 +139,7 @@ func (s *Server) Start(listenAddr string) error {
 	}
 
 	s.listener = listener
-	s.logger.Info("Server started", "listen_addr", listenAddr)
+	s.logger.Info("Server started", "listen_addr", listenAddr, "0rtt_enabled", s.config.Allow0RTT)
 
 	// 启动会话管理器
 	s.sessions.Start()

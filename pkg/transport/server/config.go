@@ -22,14 +22,26 @@ type ServerConfig struct {
 	// 网络配置
 	ListenAddr string // 监听地址（例如 ":8474"）
 
-	// QUIC 配置
-	MaxIdleTimeout                 time.Duration // 空闲超时（默认 60 秒）
-	MaxIncomingStreams             int64         // 每连接最大并发流数（默认 1000）
-	MaxIncomingUniStreams          int64         // 单向流数量（默认 100）
-	InitialStreamReceiveWindow     uint64        // 初始流接收窗口（默认 512KB）
-	MaxStreamReceiveWindow         uint64        // 最大流接收窗口（默认 6MB）
-	InitialConnectionReceiveWindow uint64        // 初始连接接收窗口（默认 1MB）
-	MaxConnectionReceiveWindow     uint64        // 最大连接接收窗口（默认 15MB）
+	// ========== QUIC 性能优化配置 ==========
+	// 空闲超时（默认 60 秒）
+	MaxIdleTimeout time.Duration
+	// 每连接最大并发流数（默认 1000）
+	MaxIncomingStreams int64
+	// 单向流数量（默认 100）
+	MaxIncomingUniStreams int64
+	// 初始流接收窗口（默认 512KB）
+	InitialStreamReceiveWindow uint64
+	// 最大流接收窗口（默认 6MB）
+	MaxStreamReceiveWindow uint64
+	// 初始连接接收窗口（默认 1MB）
+	InitialConnectionReceiveWindow uint64
+	// 最大连接接收窗口（默认 15MB）
+	MaxConnectionReceiveWindow uint64
+
+	// 0-RTT 配置（性能优化）
+	// 允许 0-RTT 数据，可减少 1 个 RTT 延迟
+	// 注意：0-RTT 数据有重放攻击风险，应用层需自行处理
+	Allow0RTT bool // 默认 false
 
 	// 会话管理配置
 	MaxClients            int64         // 最大客户端数（默认 10000）
@@ -48,14 +60,14 @@ type ServerConfig struct {
 	Logger *monitoring.Logger     // 日志实例（可选）
 }
 
-// NewDefaultServerConfig 创建默认服务器配置
+// NewDefaultServerConfig 创建默认服务器配置（性能优化版本）
 func NewDefaultServerConfig(certFile, keyFile, listenAddr string) *ServerConfig {
 	return &ServerConfig{
 		TLSCertFile: certFile,
 		TLSKeyFile:  keyFile,
 		ListenAddr:  listenAddr,
 
-		// QUIC 默认值
+		// QUIC 默认值（已优化）
 		MaxIdleTimeout:                 60 * time.Second,
 		MaxIncomingStreams:             1000,
 		MaxIncomingUniStreams:          100,
@@ -63,6 +75,10 @@ func NewDefaultServerConfig(certFile, keyFile, listenAddr string) *ServerConfig 
 		MaxStreamReceiveWindow:         6 * 1024 * 1024, // 6MB
 		InitialConnectionReceiveWindow: 1024 * 1024,     // 1MB
 		MaxConnectionReceiveWindow:     15 * 1024 * 1024, // 15MB
+
+		// 性能优化：启用 0-RTT
+		// 注意：应用层需要处理重放攻击风险
+		Allow0RTT: true,
 
 		// 会话管理默认值
 		MaxClients:             10000,
@@ -134,7 +150,7 @@ func (c *ServerConfig) BuildTLSConfig() (*tls.Config, error) {
 	return tlsutil.LoadServerTLSConfig(c.TLSCertFile, c.TLSKeyFile)
 }
 
-// BuildQUICConfig 构建 QUIC 配置
+// BuildQUICConfig 构建 QUIC 配置（性能优化版本）
 func (c *ServerConfig) BuildQUICConfig() *quic.Config {
 	return &quic.Config{
 		MaxIdleTimeout:                 c.MaxIdleTimeout,
@@ -145,6 +161,6 @@ func (c *ServerConfig) BuildQUICConfig() *quic.Config {
 		MaxStreamReceiveWindow:         c.MaxStreamReceiveWindow,
 		InitialConnectionReceiveWindow: c.InitialConnectionReceiveWindow,
 		MaxConnectionReceiveWindow:     c.MaxConnectionReceiveWindow,
-		Allow0RTT:                      false, // 禁用 0-RTT（安全考虑）
+		Allow0RTT:                      c.Allow0RTT, // 根据 Allow0RTT 配置决定是否启用
 	}
 }

@@ -1,6 +1,7 @@
 package hardware
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -42,6 +43,9 @@ func (h *Handler) RegisterRoutes(r gin.IRouter) {
 
 		// 批量操作
 		api.POST("/devices/mark-offline", h.MarkOfflineDevices)
+		api.POST("/devices/batch-delete", h.BatchDeleteDevices)
+		api.POST("/devices/batch-query", h.BatchQueryDevices)
+		api.POST("/devices/batch-update-status", h.BatchUpdateStatus)
 	}
 }
 
@@ -426,4 +430,143 @@ func (h *Handler) SaveHardwareInfo(clientID string, info *command.HardwareInfoRe
 // UpdateLastSeenTime 更新最后在线时间（供心跳/连接时调用）
 func (h *Handler) UpdateLastSeenTime(clientID string) error {
 	return h.store.UpdateLastSeenTime(clientID)
+}
+
+// ===== 批量操作 API =====
+
+// BatchDeleteDevicesRequest 批量删除设备请求
+type BatchDeleteDevicesRequest struct {
+	ClientIDs []string `json:"client_ids" binding:"required,min=1"`
+}
+
+// BatchDeleteDevicesResponse 批量删除设备响应
+type BatchDeleteDevicesResponse struct {
+	Success      bool     `json:"success"`
+	DeletedCount int      `json:"deleted_count"`
+	FailedIDs    []string `json:"failed_ids,omitempty"`
+	Message      string   `json:"message,omitempty"`
+}
+
+// BatchDeleteDevices 批量删除设备
+// POST /hardware/devices/batch-delete
+func (h *Handler) BatchDeleteDevices(c *gin.Context) {
+	var req BatchDeleteDevicesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, BatchDeleteDevicesResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	deletedCount := 0
+	failedIDs := make([]string, 0)
+
+	for _, clientID := range req.ClientIDs {
+		if err := h.store.DeleteDevice(clientID); err != nil {
+			failedIDs = append(failedIDs, clientID)
+		} else {
+			deletedCount++
+		}
+	}
+
+	message := fmt.Sprintf("Deleted %d devices", deletedCount)
+	if len(failedIDs) > 0 {
+		message += fmt.Sprintf(", %d failed", len(failedIDs))
+	}
+
+	c.JSON(http.StatusOK, BatchDeleteDevicesResponse{
+		Success:      len(failedIDs) == 0,
+		DeletedCount: deletedCount,
+		FailedIDs:    failedIDs,
+		Message:      message,
+	})
+}
+
+// BatchQueryDevicesRequest 批量查询设备请求
+type BatchQueryDevicesRequest struct {
+	ClientIDs []string `json:"client_ids" binding:"required,min=1"`
+}
+
+// BatchQueryDevicesResponse 批量查询设备响应
+type BatchQueryDevicesResponse struct {
+	Success bool     `json:"success"`
+	Devices []Device `json:"devices"`
+	Message string   `json:"message,omitempty"`
+}
+
+// BatchQueryDevices 批量查询设备（按 client_id 列表）
+// POST /hardware/devices/batch-query
+func (h *Handler) BatchQueryDevices(c *gin.Context) {
+	var req BatchQueryDevicesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, BatchQueryDevicesResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	devices := make([]Device, 0)
+	for _, clientID := range req.ClientIDs {
+		device, err := h.store.GetDeviceByClientID(clientID)
+		if err == nil && device != nil {
+			devices = append(devices, *device)
+		}
+	}
+
+	c.JSON(http.StatusOK, BatchQueryDevicesResponse{
+		Success: true,
+		Devices: devices,
+	})
+}
+
+// BatchUpdateStatusRequest 批量更新状态请求
+type BatchUpdateStatusRequest struct {
+	ClientIDs []string `json:"client_ids" binding:"required,min=1"`
+	Status    string   `json:"status" binding:"required,oneof=online offline unknown"`
+}
+
+// BatchUpdateStatusResponse 批量更新状态响应
+type BatchUpdateStatusResponse struct {
+	Success      bool     `json:"success"`
+	UpdatedCount int      `json:"updated_count"`
+	FailedIDs    []string `json:"failed_ids,omitempty"`
+	Message      string   `json:"message,omitempty"`
+}
+
+// BatchUpdateStatus 批量更新设备状态
+// POST /hardware/devices/batch-update-status
+func (h *Handler) BatchUpdateStatus(c *gin.Context) {
+	var req BatchUpdateStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, BatchUpdateStatusResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	updatedCount := 0
+	failedIDs := make([]string, 0)
+
+	for _, clientID := range req.ClientIDs {
+		if err := h.store.UpdateDeviceStatus(clientID, DeviceStatus(req.Status)); err != nil {
+			failedIDs = append(failedIDs, clientID)
+		} else {
+			updatedCount++
+		}
+	}
+
+	message := fmt.Sprintf("Updated %d devices", updatedCount)
+	if len(failedIDs) > 0 {
+		message += fmt.Sprintf(", %d failed", len(failedIDs))
+	}
+
+	c.JSON(http.StatusOK, BatchUpdateStatusResponse{
+		Success:      len(failedIDs) == 0,
+		UpdatedCount: updatedCount,
+		FailedIDs:    failedIDs,
+		Message:      message,
+	})
 }

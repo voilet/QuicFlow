@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/voilet/quic-flow/pkg/api"
+	"github.com/voilet/quic-flow/pkg/auth"
+	"github.com/voilet/quic-flow/pkg/auth/captcha"
+	"github.com/voilet/quic-flow/pkg/auth/middleware"
 	"github.com/voilet/quic-flow/pkg/audit"
 	"github.com/voilet/quic-flow/pkg/batch"
 	"github.com/voilet/quic-flow/pkg/command"
@@ -18,6 +22,7 @@ import (
 	"github.com/voilet/quic-flow/pkg/dispatcher"
 	"github.com/voilet/quic-flow/pkg/hardware"
 	"github.com/voilet/quic-flow/pkg/monitoring"
+	"github.com/voilet/quic-flow/pkg/profiling"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/recording"
 	releaseapi "github.com/voilet/quic-flow/pkg/release/api"
@@ -322,6 +327,35 @@ func runServer(cmd *cobra.Command, args []string) {
 		logger.Info("Hardware info system disabled (database not configured)")
 	}
 
+	// ========== 性能分析功能 ==========
+	// 创建性能分析器（需要数据库存储采集记录）
+	var profilingHandler *profiling.Handler
+	if releaseDB != nil {
+		// 创建采集文件存储目录
+		profilingStoreDir := "data/profiling"
+		profiler, err := profiling.NewProfiler(releaseDB, profilingStoreDir)
+		if err != nil {
+			logger.Error("Failed to create profiler", "error", err)
+		} else {
+			// 初始化数据库表
+			if err := profiler.Init(); err != nil {
+				logger.Warn("Failed to initialize profiling tables", "error", err)
+			} else {
+				profilingHandler = profiling.NewHandler(profiler)
+				httpServer.AddProfilingRoutes(profilingHandler)
+				logger.Info("Profiling system enabled", "store_dir", profilingStoreDir)
+			}
+		}
+	}
+
+	// ========== 标准 pprof 端点（兼容 go tool pprof） ==========
+	// 启用 block 和 mutex profiling
+	runtime.SetBlockProfileRate(1)
+	runtime.SetMutexProfileFraction(1)
+	stdProfilingHandler := profiling.NewStandardHandler()
+	httpServer.AddStandardProfilingRoutes(stdProfilingHandler)
+	logger.Info("Standard pprof enabled at /debug/pprof/ (use 'go tool pprof http://host:port/debug/pprof/profile?seconds=30')")
+
 	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit store
 	setupAPI.SetOnDBReady(func(db *gorm.DB) {
 		releaseAPI.SetDB(db)
@@ -365,6 +399,23 @@ func runServer(cmd *cobra.Command, args []string) {
 
 			logger.Info("Hardware info system enabled via setup")
 		}
+
+		// 初始化性能分析系统
+		if profilingHandler == nil {
+			profilingStoreDir := "data/profiling"
+			profiler, err := profiling.NewProfiler(db, profilingStoreDir)
+			if err != nil {
+				logger.Error("Failed to create profiler via setup", "error", err)
+			} else {
+				if err := profiler.Init(); err != nil {
+					logger.Warn("Failed to initialize profiling tables via setup", "error", err)
+				} else {
+					profilingHandler = profiling.NewHandler(profiler)
+					httpServer.AddProfilingRoutes(profilingHandler)
+					logger.Info("Profiling system enabled via setup")
+				}
+			}
+		}
 	})
 
 	if releaseDB != nil {
@@ -376,6 +427,16 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err := httpServer.Start(); err != nil {
 		logger.Error("Failed to start HTTP API server", "error", err)
 		os.Exit(1)
+	}
+
+	// 设置权限系统路由
+	if releaseDB != nil {
+		_, err := setupAuthRoutes(releaseDB, httpServer)
+		if err != nil {
+			logger.Warn("Failed to setup auth routes", "error", err)
+		} else {
+			logger.Info("Auth system routes registered with JWT protection")
+		}
 	}
 
 	logger.Info("HTTP API server started", "addr", cfg.Server.APIAddr)
@@ -569,22 +630,32 @@ func initDatabase(cfg *config.ServerConfig, logger *monitoring.Logger) (*gorm.DB
 	}
 
 	dbConfig := &releasemodels.DatabaseConfig{
-		Type:     dbType,
-		Host:     cfg.Database.Host,
-		Port:     cfg.Database.Port,
-		User:     cfg.Database.User,
-		Password: cfg.Database.Password,
-		DBName:   cfg.Database.DBName,
-		SSLMode:  cfg.Database.SSLMode,
-		Charset:  cfg.Database.Charset,
+		Type:           dbType,
+		Host:           cfg.Database.Host,
+		Port:           cfg.Database.Port,
+		User:           cfg.Database.User,
+		Password:       cfg.Database.Password,
+		DBName:         cfg.Database.DBName,
+		SSLMode:        cfg.Database.SSLMode,
+		Charset:        cfg.Database.Charset,
+		MaxIdleConns:   cfg.Database.MaxIdleConns,
+		MaxOpenConns:   cfg.Database.MaxOpenConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+	}
+
+	// 获取配置的 GORM 日志级别
+	logLevel := cfg.Database.LogLevel
+	if logLevel == "" {
+		logLevel = "silent" // 默认静默，避免高并发性能问题
 	}
 
 	logger.Info("Connecting to database",
 		"host", dbConfig.Host,
 		"port", dbConfig.Port,
-		"dbname", dbConfig.DBName)
+		"dbname", dbConfig.DBName,
+		"log_level", logLevel)
 
-	db, err := releasemodels.InitDB(dbConfig)
+	db, err := releasemodels.InitDBWithLogLevel(dbConfig, logLevel)
 	if err != nil {
 		return nil, err
 	}
@@ -604,9 +675,91 @@ func initDatabase(cfg *config.ServerConfig, logger *monitoring.Logger) (*gorm.DB
 		}
 
 		logger.Info("Database migrations completed")
+
+		// 初始化权限系统数据库表和种子数据
+		if err := initAuthSystem(db); err != nil {
+			logger.Warn("Failed to initialize auth system", "error", err)
+		}
 	}
 
 	return db, nil
+}
+
+// initAuthSystem 初始化权限系统
+func initAuthSystem(db *gorm.DB) error {
+	fmt.Println("=== 初始化权限系统 ===")
+
+	// 检查是否已初始化
+	hasData, err := auth.CheckInit(db)
+	if err != nil {
+		return fmt.Errorf("检查权限系统状态失败: %w", err)
+	}
+
+	if !hasData {
+		// 首次初始化，创建表结构和种子数据
+		if err := auth.InitDB(db); err != nil {
+			return fmt.Errorf("权限系统初始化失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// setupAuthRoutes 设置权限系统路由，返回authManager供后续使用
+func setupAuthRoutes(db *gorm.DB, httpServer *api.HTTPServer) (*auth.Manager, error) {
+	// 创建 JWT 配置
+	jwtConfig := &middleware.JWTConfig{
+		SigningKey:  "quic-flow-jwt-secret-key-change-in-production",
+		ExpiresTime: 7 * 24 * time.Hour, // 7天
+		BufferTime:   1 * time.Hour,      // 1小时缓冲
+		Issuer:       "quic-flow",
+	}
+
+	// 创建权限管理器
+	authManager, err := auth.NewManager(db, &auth.Config{
+		JWTSigningKey: jwtConfig.SigningKey,
+		JWTExpires:    jwtConfig.ExpiresTime.String(),
+		BufferTime:    jwtConfig.BufferTime.String(),
+		RouterPrefix:  "/api",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 初始化权限系统
+	if err := authManager.Initialize(); err != nil {
+		return nil, err
+	}
+
+	// 设置白名单路径（不需要认证的路由）
+	authManager.SetWhitelist([]string{
+		"/api/base/login",
+		"/api/base/captcha",
+		"/api/setup",
+		"/health",
+	})
+
+	// 注册验证码路由（公开，不需要JWT）
+	captch := captcha.NewCaptcha(nil)
+	captch.RegisterRoutes(httpServer.GetRouter().Group("/api/base"))
+
+	// 设置验证码验证函数
+	auth.SetCaptchaVerify(func(id, code string) bool {
+		return captcha.GetCodeStore().Verify(id, code)
+	})
+
+	// 注册公开路由（登录、登出等）
+	publicRouter := httpServer.GetRouter().Group("/api")
+	authManager.RegisterPublicRoutes(publicRouter)
+
+	// 为业务API添加JWT中间件保护
+	jwtMiddleware := authManager.GetJWTMiddleware()
+
+	// 保护需要认证的业务API路由
+	businessAPI := httpServer.GetRouter().Group("/api")
+	businessAPI.Use(jwtMiddleware.Handler())
+
+	return authManager, nil
 }
 
 // processHardwareReports 处理客户端硬件信息自动上报

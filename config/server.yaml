@@ -16,8 +16,18 @@ database:
     sslmode: disable
     charset: utf8mb4
     automigrate: true
+    # GORM 日志级别: silent, error, warn, info
+    # silent: 禁用所有日志（生产环境推荐，避免高并发性能问题）
+    # error: 仅错误日志
+    # warn: 警告和错误日志
+    # info: 详细 SQL 日志（开发调试用）
+    log_level: silent
+    # 连接池配置
+    max_idle_conns: 10
+    max_open_conns: 100
+    conn_max_lifetime: 3600  # 连接最大存活时间（秒），默认 1 小时
 log:
-    level: debug
+    level: info
     format: text
     file: ""
 message:
@@ -35,6 +45,11 @@ quic:
     maxstreamreceivewindow: 6291456
     initialconnectionreceivewindow: 1048576
     maxconnectionreceivewindow: 15728640
+    # ========== 性能优化配置 ==========
+    # 启用 0-RTT (允许客户端在首个 RTT 内发送数据)
+    # 可减少重复连接的延迟约 50%，但有重放攻击风险
+    # 应用层需要自行处理重放攻击（例如使用 nonce）
+    allow_0rtt: true
 server:
     addr: :8474
     apiaddr: :8475
@@ -48,3 +63,14 @@ session:
 tls:
     certfile: certs/server-cert.pem
     keyfile: certs/server-key.pem
+    # ========== TLS 性能优化配置 ==========
+    # Session Ticket 密钥（用于会话恢复，减少 TLS 握手开销）
+    # 生产环境必须设置！多个密钥用逗号分隔，支持密钥轮换
+    # 生成方式: openssl rand -hex 32
+    # 建议配置 3 个密钥，支持平滑轮换
+    # 例如: session_ticket_keys: "key1,key2,key3"
+    # 留空则使用随机密钥（仅用于开发环境）
+    session_ticket_keys: ""
+    # Session Ticket 密钥轮换间隔（小时）
+    # 建议每 24 小时轮换一次
+    key_rotation_interval: 24

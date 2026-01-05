@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,7 +29,8 @@ var (
 	insecure   bool
 
 	// hwinfo 参数
-	hwinfoFormat string
+	hwinfoFormat      string
+	hwinfoForceRefresh bool
 
 	// diskbench 参数
 	benchDevice     string
@@ -43,6 +45,15 @@ var (
 	sshPassword     string
 	sshShell        string
 	sshPortForward  bool
+)
+
+// 硬件信息缓存
+var (
+	hwCache      *command.HardwareInfoResult
+	hwCacheTime  time.Time
+	hwCacheMu    sync.RWMutex
+	hwCacheTTL   = 3 * time.Minute // 默认缓存3分钟
+	forceRefresh bool // 强制刷新标志
 )
 
 // rootCmd 根命令
@@ -94,6 +105,7 @@ func init() {
 
 	// hwinfo 子命令参数
 	hwinfoCmd.Flags().StringVarP(&hwinfoFormat, "format", "f", "json", "输出格式 (json|text)")
+	hwinfoCmd.Flags().BoolVarP(&hwinfoForceRefresh, "force-refresh", "F", false, "强制刷新硬件信息（忽略缓存）")
 
 	// diskbench 子命令参数
 	diskbenchCmd.Flags().StringVarP(&benchDevice, "device", "d", "", "指定测试设备（如 nvme0n1），为空则测试所有非系统盘")
@@ -216,26 +228,18 @@ func runClient(cmd *cobra.Command, args []string) {
 func runHwinfo(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 
-	// 调用硬件信息获取函数
-	result, err := handlers.GetHardwareInfo(ctx, nil)
+	// 使用缓存的硬件信息（除非强制刷新）
+	hwInfo, err := getCachedHardwareInfo(ctx, hwinfoForceRefresh)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "获取硬件信息失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	if hwinfoFormat == "text" {
-		// 文本格式输出
-		var hwInfo command.HardwareInfoResult
-		if err := json.Unmarshal(result, &hwInfo); err != nil {
-			fmt.Fprintf(os.Stderr, "解析硬件信息失败: %v\n", err)
-			os.Exit(1)
-		}
-		printHwinfoText(&hwInfo)
+		printHwinfoText(hwInfo)
 	} else {
 		// JSON 格式输出（美化）
-		var prettyJSON map[string]interface{}
-		json.Unmarshal(result, &prettyJSON)
-		output, _ := json.MarshalIndent(prettyJSON, "", "  ")
+		output, _ := json.MarshalIndent(hwInfo, "", "  ")
 		fmt.Println(string(output))
 	}
 }
@@ -456,6 +460,39 @@ func shutdown(logger *monitoring.Logger, disp *dispatcher.Dispatcher, c *client.
 	logger.Info("Client stopped gracefully")
 }
 
+// getCachedHardwareInfo 获取缓存的硬件信息
+func getCachedHardwareInfo(ctx context.Context, force bool) (*command.HardwareInfoResult, error) {
+	hwCacheMu.RLock()
+	// 检查缓存是否存在且未过期
+	cached := hwCache != nil && time.Since(hwCacheTime) < hwCacheTTL
+	if cached && !force {
+		// 返回缓存副本
+		result := *hwCache
+		hwCacheMu.RUnlock()
+		return &result, nil
+	}
+	hwCacheMu.RUnlock()
+
+	// 采集新的硬件信息
+	result, err := handlers.GetHardwareInfo(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var hwInfo command.HardwareInfoResult
+	if err := json.Unmarshal(result, &hwInfo); err != nil {
+		return nil, err
+	}
+
+	// 更新缓存
+	hwCacheMu.Lock()
+	hwCache = &hwInfo
+	hwCacheTime = time.Now()
+	hwCacheMu.Unlock()
+
+	return &hwInfo, nil
+}
+
 // reportHardwareInfo 上报硬件信息到服务器
 func reportHardwareInfo(c *client.Client, logger *monitoring.Logger) {
 	// 等待一小段时间确保连接完全建立
@@ -463,17 +500,10 @@ func reportHardwareInfo(c *client.Client, logger *monitoring.Logger) {
 
 	ctx := context.Background()
 
-	// 获取硬件信息
-	result, err := handlers.GetHardwareInfo(ctx, nil)
+	// 获取缓存的硬件信息（首次采集会缓存，后续使用缓存）
+	hwInfo, err := getCachedHardwareInfo(ctx, forceRefresh)
 	if err != nil {
 		logger.Warn("Failed to get hardware info for reporting", "error", err)
-		return
-	}
-
-	// 解析 result 以获取实际的硬件信息对象（避免 base64 编码）
-	var hwInfo command.HardwareInfoResult
-	if err := json.Unmarshal(result, &hwInfo); err != nil {
-		logger.Warn("Failed to parse hardware info", "error", err)
 		return
 	}
 

@@ -2,6 +2,8 @@ package models
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -27,6 +29,10 @@ type DatabaseConfig struct {
 	DBName   string
 	SSLMode  string // PostgreSQL 专用
 	Charset  string // MySQL 专用
+	// 连接池配置
+	MaxIdleConns   int // 最大空闲连接数
+	MaxOpenConns   int // 最大打开连接数
+	ConnMaxLifetime int // 连接最大存活时间（秒）
 }
 
 // DefaultConfig 默认配置
@@ -51,6 +57,77 @@ func (c *DatabaseConfig) DSN() string {
 	default:
 		return c.postgresDSN()
 	}
+}
+
+// parseLogLevel 解析日志级别字符串
+// 支持: silent, error, warn, info (默认: silent)
+func parseLogLevel(logLevel string) logger.LogLevel {
+	switch strings.ToLower(logLevel) {
+	case "info":
+		return logger.Info
+	case "warn":
+		return logger.Warn
+	case "error":
+		return logger.Error
+	case "silent":
+		return logger.Silent
+	default:
+		// 生产环境默认禁用 GORM 日志，避免高并发性能问题
+		return logger.Silent
+	}
+}
+
+// InitDBWithLogLevel 初始化数据库连接（指定日志级别）
+func InitDBWithLogLevel(config *DatabaseConfig, logLevel string) (*gorm.DB, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+
+	var dialector gorm.Dialector
+	dsn := config.DSN()
+
+	switch config.Type {
+	case DBTypeMySQL:
+		dialector = mysql.Open(dsn)
+	default:
+		dialector = postgres.Open(dsn)
+	}
+
+	db, err := gorm.Open(dialector, &gorm.Config{
+		Logger: logger.Default.LogMode(parseLogLevel(logLevel)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect database: %w", err)
+	}
+
+	// 配置连接池
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database instance: %w", err)
+	}
+
+	// 设置最大空闲连接数
+	if config.MaxIdleConns > 0 {
+		sqlDB.SetMaxIdleConns(config.MaxIdleConns)
+	} else {
+		sqlDB.SetMaxIdleConns(10) // 默认值
+	}
+
+	// 设置最大打开连接数
+	if config.MaxOpenConns > 0 {
+		sqlDB.SetMaxOpenConns(config.MaxOpenConns)
+	} else {
+		sqlDB.SetMaxOpenConns(100) // 默认值
+	}
+
+	// 设置连接最大存活时间
+	if config.ConnMaxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second)
+	} else {
+		sqlDB.SetConnMaxLifetime(time.Hour) // 默认 1 小时
+	}
+
+	return db, nil
 }
 
 // postgresDSN 生成 PostgreSQL 连接字符串
@@ -101,30 +178,9 @@ func (c *DatabaseConfig) systemDSN() string {
 	}
 }
 
-// InitDB 初始化数据库连接
+// InitDB 初始化数据库连接（使用静默日志模式，避免高并发性能问题）
 func InitDB(config *DatabaseConfig) (*gorm.DB, error) {
-	if config == nil {
-		config = DefaultConfig()
-	}
-
-	var dialector gorm.Dialector
-	dsn := config.DSN()
-
-	switch config.Type {
-	case DBTypeMySQL:
-		dialector = mysql.Open(dsn)
-	default:
-		dialector = postgres.Open(dsn)
-	}
-
-	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect database: %w", err)
-	}
-
-	return db, nil
+	return InitDBWithLogLevel(config, "silent")
 }
 
 // ListDatabases 列出服务器上所有可用的数据库

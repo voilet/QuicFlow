@@ -21,6 +21,17 @@ tls:
   cert_file: "certs/server-cert.pem"
   # 私钥文件路径
   key_file: "certs/server-key.pem"
+  # ========== TLS 性能优化配置 ==========
+  # Session Ticket 密钥（用于会话恢复，减少 TLS 握手开销）
+  # 生产环境必须设置！多个密钥用逗号分隔，支持密钥轮换
+  # 生成方式: openssl rand -hex 32
+  # 建议配置 3 个密钥，支持平滑轮换
+  # 例如: session_ticket_keys: "key1,key2,key3"
+  # 留空则使用随机密钥（仅用于开发环境）
+  session_ticket_keys: ""
+  # Session Ticket 密钥轮换间隔（小时）
+  # 高性能场景可适当缩短，建议 12-24 小时
+  key_rotation_interval: 12
 
 # QUIC 协议配置 (高性能优化)
 quic:
@@ -38,6 +49,11 @@ quic:
   initial_connection_receive_window: 2097152
   # 最大连接接收窗口（字节）- 32MB
   max_connection_receive_window: 33554432
+  # ========== 性能优化配置 ==========
+  # 启用 0-RTT (允许客户端在首个 RTT 内发送数据)
+  # 可减少重复连接的延迟约 50%，但有重放攻击风险
+  # 高性能场景建议启用，应用层需要自行处理重放攻击
+  allow_0rtt: true
 
 # 会话管理配置 (减少心跳开销)
 session:
@@ -88,3 +104,31 @@ log:
   format: "text"
   # 日志文件路径（空表示输出到 stdout）
   file: ""
+
+# 数据库配置
+database:
+  # 是否启用数据库
+  enabled: true
+  # 数据库类型
+  type: postgres
+  # 数据库连接
+  host: localhost
+  port: 5432
+  user: postgres
+  password: ""
+  dbname: quic_release
+  sslmode: disable
+  charset: utf8mb4
+  # 是否自动迁移
+  auto_migrate: true
+  # GORM 日志级别: silent, error, warn, info
+  # silent: 禁用所有日志（生产环境推荐，避免高并发性能问题）
+  # error: 仅错误日志
+  # warn: 警告和错误日志
+  # info: 详细 SQL 日志（开发调试用）
+  log_level: silent
+  # 连接池配置（高性能模式增加连接池）
+  max_idle_conns: 20
+  max_open_conns: 200
+  conn_max_lifetime: 3600  # 连接最大存活时间（秒），默认 1 小时
+

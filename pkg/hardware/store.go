@@ -1,7 +1,10 @@
 package hardware
 
 import (
+	"crypto/md5"
+	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/voilet/quic-flow/pkg/command"
@@ -9,25 +12,101 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// hardwareCache 硬件信息缓存项
+type hardwareCache struct {
+	hash      string    // 硬件信息的哈希值
+	timestamp time.Time // 缓存时间
+}
+
 // Store 硬件信息存储
 type Store struct {
-	db *gorm.DB
+	db          *gorm.DB
+	cache       map[string]*hardwareCache // client_id -> 缓存项
+	cacheMu     sync.RWMutex
+	cacheTTL    time.Duration // 缓存过期时间
+	enabledOnce map[string]bool // 记录已处理过的首次上报（防止重复记录历史）
+	onceMu      sync.Mutex
+}
+
+// hardwareInfoHash 计算硬件信息的哈希值（用于检测变化）
+func hardwareInfoHash(info *command.HardwareInfoResult) string {
+	// 只用关键字段计算哈希
+	keyFields := struct {
+		CPUModel    string
+		MemoryGB    float64
+		DiskTB      float64
+		PrimaryMAC  string
+		Hostname    string
+		OS          string
+		KernelArch  string
+		HostID      string
+		ProductUUID string
+	}{
+		CPUModel:    info.ModelName,
+		MemoryGB:    info.Memory.TotalGB,
+		DiskTB:      info.TotalDiskCapacityTBDecimal,
+		PrimaryMAC:  info.MAC,
+		Hostname:    info.Host.Hostname,
+		OS:          info.Host.OS,
+		KernelArch:  info.Host.KernelArch,
+		HostID:      info.Host.HostID,
+		ProductUUID: info.DMI.ProductUUID,
+	}
+	data, _ := json.Marshal(keyFields)
+	return fmt.Sprintf("%x", md5.Sum(data))
 }
 
 // NewStore 创建硬件信息存储
 func NewStore(db *gorm.DB) *Store {
-	return &Store{db: db}
+	return &Store{
+		db:          db,
+		cache:       make(map[string]*hardwareCache),
+		cacheTTL:    5 * time.Minute, // 默认缓存5分钟
+		enabledOnce: make(map[string]bool),
+	}
 }
 
 // SaveHardwareInfo 保存硬件信息（Upsert: 按 client_id 去重，存在则更新，不存在则插入）
+// 使用缓存优化：如果硬件信息未变化且缓存有效，只更新 LastSeenAt
 func (s *Store) SaveHardwareInfo(clientID string, info *command.HardwareInfoResult) (*Device, error) {
 	now := time.Now()
+	infoHash := hardwareInfoHash(info)
+
+	// 检查缓存：如果硬件信息未变化且缓存有效，只更新 LastSeenAt（轻量级操作）
+	s.cacheMu.RLock()
+	cached, hasCache := s.cache[clientID]
+	cacheValid := hasCache && now.Sub(cached.timestamp) < s.cacheTTL
+	hashUnchanged := hasCache && cached.hash == infoHash
+	s.cacheMu.RUnlock()
+
+	if cacheValid && hashUnchanged {
+		// 硬件信息未变化，只更新 LastSeenAt（避免完整的 upsert）
+		err := s.db.Model(&Device{}).
+			Where("client_id = ?", clientID).
+			Updates(map[string]interface{}{
+				"last_seen_at": &now,
+				"status":       string(DeviceStatusOnline),
+				"updated_at":   now,
+			}).Error
+
+		if err != nil {
+			// 如果更新失败，可能是新设备，执行完整插入
+			// 继续执行下面的完整保存逻辑
+		} else {
+			// 获取更新后的设备信息
+			var device Device
+			if err := s.db.Where("client_id = ?", clientID).First(&device).Error; err == nil {
+				return &device, nil
+			}
+			// 如果查询失败，继续执行完整保存
+		}
+	}
 
 	// 构建 Device 对象（只填充简化后的冗余字段）
 	device := &Device{
-		ClientID:     clientID,
-		Status:       string(DeviceStatusOnline),
-		CPUModel:     info.ModelName,
+		ClientID:      clientID,
+		Status:        string(DeviceStatusOnline),
+		CPUModel:      info.ModelName,
 		MemoryTotalGB: info.Memory.TotalGB,
 		DiskTotalTB:   info.TotalDiskCapacityTBDecimal,
 		PrimaryMAC:    formatMAC(info.MAC),
@@ -44,7 +123,7 @@ func (s *Store) SaveHardwareInfo(clientID string, info *command.HardwareInfoResu
 
 	// 执行 Upsert（存在则更新，不存在则插入）
 	err := s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "client_id"}},
+		Columns: []clause.Column{{Name: "client_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"cpu_model", "memory_total_gb", "disk_total_tb",
 			"primary_mac", "hostname", "os", "kernel_arch",
@@ -57,11 +136,16 @@ func (s *Store) SaveHardwareInfo(clientID string, info *command.HardwareInfoResu
 		return nil, fmt.Errorf("failed to save hardware info: %w", err)
 	}
 
-	// 检查是否需要记录变更历史（新设备）
-	if err := s.recordChangeHistoryIfNeeded(clientID, info); err != nil {
-		// 记录历史失败不影响主流程
-		fmt.Printf("Warning: failed to record hardware history: %v\n", err)
+	// 更新缓存
+	s.cacheMu.Lock()
+	s.cache[clientID] = &hardwareCache{
+		hash:      infoHash,
+		timestamp: now,
 	}
+	s.cacheMu.Unlock()
+
+	// 检查是否需要记录变更历史（仅首次或硬件变化时）
+	s.recordChangeHistoryIfNeeded(clientID, info)
 
 	return device, nil
 }
@@ -73,8 +157,15 @@ func (s *Store) recordChangeHistoryIfNeeded(clientID string, info *command.Hardw
 	err := s.db.Where("client_id = ?", clientID).First(&existing).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			// 新设备，记录创建历史
-			return s.createHistory(clientID, "created", "New device registered", info)
+			// 新设备，记录创建历史（每个 client_id 只记录一次）
+			s.onceMu.Lock()
+			alreadyRecorded := s.enabledOnce[clientID]
+			if !alreadyRecorded {
+				s.enabledOnce[clientID] = true
+				s.onceMu.Unlock()
+				return s.createHistory(clientID, "created", "New device registered", info)
+			}
+			s.onceMu.Unlock()
 		}
 		return err
 	}
