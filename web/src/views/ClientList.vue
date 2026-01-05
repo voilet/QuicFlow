@@ -99,91 +99,93 @@
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="client_id" label="客户端ID" min-width="200">
+        <el-table-column prop="client_id" label="客户端ID" min-width="180">
           <template #default="{ row }">
-            <el-tag type="success">{{ row.client_id }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="remote_addr" label="远程地址" min-width="150" />
-
-        <el-table-column label="连接时间" min-width="180">
-          <template #default="{ row }">
-            {{ formatTime(row.connected_at) }}
-          </template>
-        </el-table-column>
-
-        <el-table-column label="在线时长" min-width="140">
-          <template #default="{ row }">
-            <div class="uptime-display">
-              <el-icon class="uptime-icon"><Clock /></el-icon>
-              <span class="uptime-text">{{ formatUptimeDisplay(row.uptime) }}</span>
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="状态" width="100">
-          <template #default>
-            <el-tag type="success" class="status-tag">
-              <el-icon class="status-icon"><CircleCheck /></el-icon>
-              <span class="status-text">在线</span>
+            <el-tag :type="row.online ? 'success' : 'info'" size="small">
+              {{ row.client_id }}
             </el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column prop="hostname" label="主机名" min-width="150">
           <template #default="{ row }">
-            <el-button
-              type="success"
-              size="small"
-              :icon="Monitor"
-              @click="getHardwareInfo(row.client_id)"
-              :loading="hardwareLoading[row.client_id]"
-            >
-              硬件信息
-            </el-button>
-            <el-popover
-              placement="top"
-              :width="200"
-              trigger="hover"
-            >
-              <template #reference>
-                <el-button
-                  type="warning"
-                  size="small"
-                  :icon="Odometer"
-                  @click="runDiskBenchmark(row.client_id)"
-                  :loading="benchmarkLoading[row.client_id]"
-                >
-                  磁盘测试
-                </el-button>
+            <span class="hostname-text">{{ row.hostname || '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row)" class="status-tag" size="small">
+              <el-icon class="status-icon">
+                <component :is="getStatusIcon(row)" />
+              </el-icon>
+              <span class="status-text">{{ getStatusText(row) }}</span>
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="配置" min-width="200">
+          <template #default="{ row }">
+            <div class="config-info">
+              <span class="config-item">
+                <el-icon><Cpu /></el-icon>
+                {{ row.cpu_model || '-' }}
+              </span>
+              <span class="config-item">
+                <el-icon><Monitor /></el-icon>
+                {{ formatMemory(row.memory_gb) }}
+              </span>
+              <span class="config-item">
+                <el-icon><Odometer /></el-icon>
+                {{ formatDisk(row.disk_tb) }}
+              </span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="os" label="系统" width="120">
+          <template #default="{ row }">
+            <span class="os-text">{{ row.os || '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="remote_addr" label="远程地址" width="140">
+          <template #default="{ row }">
+            {{ row.online ? (row.remote_addr || '-') : '-' }}
+          </template>
+        </el-table-column>
+
+        <el-table-column label="在线时长" width="120">
+          <template #default="{ row }">
+            <div v-if="row.online" class="uptime-display">
+              <el-icon class="uptime-icon"><Clock /></el-icon>
+              <span class="uptime-text">{{ formatUptimeDisplay(row.uptime) }}</span>
+            </div>
+            <span v-else class="offline-text">离线</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="80" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-dropdown trigger="click" @command="(cmd) => handleActionCommand(cmd, row)">
+              <el-button type="primary" size="small" :icon="MoreFilled" circle />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item :icon="Upload" command="sync" :disabled="!row.online">
+                    同步硬件信息
+                  </el-dropdown-item>
+                  <el-dropdown-item :icon="Odometer" command="benchmark" :disabled="!row.online">
+                    磁盘测试
+                  </el-dropdown-item>
+                  <el-dropdown-item :icon="DocumentAdd" command="command" :disabled="!row.online">
+                    下发指令
+                  </el-dropdown-item>
+                  <el-dropdown-item :icon="Position" command="detail" divided>
+                    查看详情
+                  </el-dropdown-item>
+                </el-dropdown-menu>
               </template>
-              <div class="benchmark-options">
-                <el-switch
-                  v-model="benchmarkConcurrent"
-                  active-text="并发"
-                  inactive-text="顺序"
-                  style="margin-bottom: 8px;"
-                />
-                <div class="option-tip">{{ benchmarkConcurrent ? '同时测试所有磁盘' : '依次测试每块磁盘' }}</div>
-              </div>
-            </el-popover>
-            <el-button
-              type="primary"
-              size="small"
-              :icon="DocumentAdd"
-              @click="sendCommand(row.client_id)"
-            >
-              下发指令
-            </el-button>
-            <el-button
-              type="info"
-              size="small"
-              :icon="Position"
-              @click="openDetailDrawer(row.client_id)"
-            >
-              详情
-            </el-button>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -649,6 +651,150 @@
             />
           </el-card>
         </el-tab-pane>
+
+        <!-- 硬件信息 Tab -->
+        <el-tab-pane label="硬件信息" name="hardware">
+          <el-card shadow="never" v-loading="hardwareLoading[currentDetailClientId]">
+            <template #header>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span class="section-title">硬件信息</span>
+                <el-button type="primary" size="small" :icon="Refresh" @click="loadHardwareInfo">刷新</el-button>
+              </div>
+            </template>
+          </el-card>
+          <div v-if="hardwareInfo" class="hardware-info" style="margin-top: 16px;">
+            <!-- 主机信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">主机信息</span>
+              </template>
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="主机名">{{ hardwareInfo.host?.hostname }}</el-descriptions-item>
+                <el-descriptions-item label="操作系统">{{ hardwareInfo.host?.os }}</el-descriptions-item>
+                <el-descriptions-item label="平台">{{ hardwareInfo.host?.platform }} {{ hardwareInfo.host?.platform_version }}</el-descriptions-item>
+                <el-descriptions-item label="内核版本">{{ hardwareInfo.host?.kernel_version }}</el-descriptions-item>
+                <el-descriptions-item label="架构">{{ hardwareInfo.host?.kernel_arch }}</el-descriptions-item>
+                <el-descriptions-item label="运行时间">{{ formatUptime(hardwareInfo.host?.uptime) }}</el-descriptions-item>
+                <el-descriptions-item label="虚拟化">{{ hardwareInfo.host?.virtualization_system || '无' }} ({{ hardwareInfo.host?.virtualization_role || '-' }})</el-descriptions-item>
+                <el-descriptions-item label="主机ID">{{ hardwareInfo.host?.host_id }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+
+            <!-- CPU 信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">CPU 信息</span>
+              </template>
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="型号" :span="2">{{ hardwareInfo.model_name }}</el-descriptions-item>
+                <el-descriptions-item label="物理核心">{{ hardwareInfo.cpu_core_count }}</el-descriptions-item>
+                <el-descriptions-item label="逻辑处理器">{{ hardwareInfo.cpu_thread_count }}</el-descriptions-item>
+                <el-descriptions-item label="频率">{{ hardwareInfo.physical_cpu_frequency_mhz }} MHz</el-descriptions-item>
+                <el-descriptions-item label="内核报告CPU数">{{ hardwareInfo.num_cpu_kernel }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+
+            <!-- 内存信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">内存信息</span>
+              </template>
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="总容量">{{ hardwareInfo.memory?.total_gb_rounded }} GB</el-descriptions-item>
+                <el-descriptions-item label="内存条数量">{{ hardwareInfo.memory?.count }}</el-descriptions-item>
+              </el-descriptions>
+              <el-table v-if="hardwareInfo.memory?.modules?.length" :data="hardwareInfo.memory.modules" size="small" class="sub-table">
+                <el-table-column prop="locator" label="插槽" width="100" />
+                <el-table-column prop="size" label="容量" width="120" />
+                <el-table-column prop="type" label="类型" width="100" />
+                <el-table-column prop="manufacturer" label="制造商" />
+              </el-table>
+            </el-card>
+
+            <!-- 磁盘信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">磁盘信息 (总容量: {{ hardwareInfo.total_disk_capacity_tb?.toFixed(2) }} TB)</span>
+              </template>
+              <el-table :data="hardwareInfo.disks" size="small">
+                <el-table-column prop="device" label="设备" width="100" />
+                <el-table-column prop="model" label="型号" min-width="150" />
+                <el-table-column prop="kind" label="类型" width="80">
+                  <template #default="{ row }">
+                    <el-tag :type="row.kind === 'SSD' ? 'success' : row.kind === 'NVMe' ? 'warning' : 'info'" size="small">
+                      {{ row.kind }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="容量" width="100">
+                  <template #default="{ row }">
+                    {{ row.size_rounded_tb >= 1 ? row.size_rounded_tb.toFixed(2) + ' TB' : (row.size_rounded_bytes / 1024 / 1024 / 1024).toFixed(0) + ' GB' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="系统盘" width="80">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.is_system_disk" type="danger" size="small">是</el-tag>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+
+            <!-- 网卡信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">网卡信息 (主MAC: {{ hardwareInfo.mac }})</span>
+              </template>
+              <el-table :data="hardwareInfo.nic_infos" size="small">
+                <el-table-column prop="name" label="名称" width="100" />
+                <el-table-column prop="mac_address" label="MAC地址" width="150" />
+                <el-table-column prop="ip_address" label="IPv4" width="130" />
+                <el-table-column prop="ipv6" label="IPv6" min-width="200">
+                  <template #default="{ row }">
+                    <span class="ipv6-text">{{ row.ipv6 || '-' }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="speed" label="速率" width="120" />
+                <el-table-column label="状态" width="80">
+                  <template #default="{ row }">
+                    <el-tag :type="row.status === 'up' ? 'success' : 'danger'" size="small">
+                      {{ row.status }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="物理" width="70">
+                  <template #default="{ row }">
+                    <el-icon v-if="row.is_physical" color="#67c23a"><CircleCheck /></el-icon>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+
+            <!-- DMI 信息 -->
+            <el-card shadow="never" class="info-section">
+              <template #header>
+                <span class="section-title">DMI/BIOS 信息</span>
+              </template>
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="系统厂商">{{ hardwareInfo.dmi?.sys_vendor }}</el-descriptions-item>
+                <el-descriptions-item label="产品名称">{{ hardwareInfo.dmi?.product_name }}</el-descriptions-item>
+                <el-descriptions-item label="产品UUID">{{ hardwareInfo.dmi?.product_uuid }}</el-descriptions-item>
+                <el-descriptions-item label="BIOS厂商">{{ hardwareInfo.dmi?.bios_vendor }}</el-descriptions-item>
+                <el-descriptions-item label="BIOS版本">{{ hardwareInfo.dmi?.bios_version }}</el-descriptions-item>
+                <el-descriptions-item label="BIOS日期">{{ hardwareInfo.dmi?.bios_date }}</el-descriptions-item>
+                <el-descriptions-item label="机箱类型">{{ hardwareInfo.dmi?.chassis_type }}</el-descriptions-item>
+                <el-descriptions-item label="机箱厂商">{{ hardwareInfo.dmi?.chassis_vendor }}</el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+
+            <!-- 操作按钮 -->
+            <div style="text-align: center; margin-top: 16px;">
+              <el-button type="primary" @click="copyHardwareInfo">复制JSON</el-button>
+            </div>
+          </div>
+          <el-empty v-else description="暂无硬件信息" />
+        </el-tab-pane>
       </el-tabs>
     </el-drawer>
 
@@ -784,7 +930,11 @@ import {
   Document,
   Monitor,
   Odometer,
-  Position
+  Position,
+  Cpu,
+  Warning,
+  MoreFilled,
+  Upload
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import dayjs from 'dayjs'
@@ -905,22 +1055,22 @@ function formatJSON(obj) {
 
 // 格式化在线时长显示（优化显示格式）
 function formatUptimeDisplay(uptime) {
-  if (!uptime) return '0秒'
-  
+  if (!uptime) return '-'
+
   // 解析格式：1h35m51s
   const match = uptime.match(/(\d+)h(\d+)m(\d+)s/)
   if (match) {
     const h = parseInt(match[1])
     const m = parseInt(match[2])
-    
+
     // 超过小时，只显示小时和分钟，不显示秒数
     const parts = []
     if (h > 0) parts.push(`${h}小时`)
     if (m > 0) parts.push(`${m}分钟`)
-    
+
     return parts.length > 0 ? parts.join('') : '0分钟'
   }
-  
+
   // 如果没有匹配到，尝试其他格式：35m51s
   const matchM = uptime.match(/(\d+)m(\d+)s/)
   if (matchM) {
@@ -928,14 +1078,50 @@ function formatUptimeDisplay(uptime) {
     // 有分钟，只显示分钟，不显示秒数
     return m > 0 ? `${m}分钟` : '0分钟'
   }
-  
+
   // 只有秒数：51s
   const matchS = uptime.match(/(\d+)s/)
   if (matchS) {
     return `${parseInt(matchS[1])}秒`
   }
-  
+
   return uptime
+}
+
+// 获取状态类型
+function getStatusType(row) {
+  if (!row.online) return 'info'
+  return 'success'
+}
+
+// 获取状态图标
+function getStatusIcon(row) {
+  if (!row.online) return Warning
+  return CircleCheck
+}
+
+// 获取状态文本
+function getStatusText(row) {
+  if (!row.online) return '离线'
+  return '在线'
+}
+
+// 格式化内存
+function formatMemory(gb) {
+  if (!gb) return '-'
+  if (gb >= 1024) {
+    return `${(gb / 1024).toFixed(1)} TB`
+  }
+  return `${gb} GB`
+}
+
+// 格式化磁盘
+function formatDisk(tb) {
+  if (!tb) return '-'
+  if (tb >= 1024) {
+    return `${(tb / 1024).toFixed(1)} PB`
+  }
+  return `${tb} TB`
 }
 
 // 加载客户端列表
@@ -1220,37 +1406,54 @@ function viewHistory(clientId) {
   })
 }
 
-// 获取硬件信息
-async function getHardwareInfo(clientId) {
-  const targetClientId = clientId || currentDetailClientId.value
-  if (!targetClientId) return
-  
-  hardwareLoading.value[targetClientId] = true
-  currentClientId.value = targetClientId
+// 处理操作列下拉菜单命令
+function handleActionCommand(command, row) {
+  switch (command) {
+    case 'sync':
+      syncHardwareInfo(row.client_id)
+      break
+    case 'benchmark':
+      runDiskBenchmark(row.client_id)
+      break
+    case 'command':
+      sendCommand(row.client_id)
+      break
+    case 'detail':
+      openDetailDrawer(row.client_id)
+      break
+  }
+}
+
+// 同步硬件信息（发送命令到客户端刷新）
+async function syncHardwareInfo(clientId) {
+  if (!clientId) return
+
+  hardwareLoading.value[clientId] = true
 
   try {
     const res = await api.sendCommand({
-      client_id: targetClientId,
+      client_id: clientId,
       command_type: 'hardware.info',
       payload: {},
       timeout: 30
     })
 
     if (res.success && res.command_id) {
-      // 等待命令执行完成
-      await pollCommandResult(res.command_id)
+      ElMessage.success('硬件信息同步命令已发送')
+      // 轮询命令结果
+      pollSyncResult(res.command_id, clientId)
     } else {
       ElMessage.error(res.message || '发送命令失败')
     }
   } catch (error) {
-    ElMessage.error('获取硬件信息失败: ' + (error.message || '未知错误'))
+    ElMessage.error('同步硬件信息失败: ' + (error.message || '未知错误'))
   } finally {
-    hardwareLoading.value[targetClientId] = false
+    hardwareLoading.value[clientId] = false
   }
 }
 
-// 轮询命令结果
-async function pollCommandResult(commandId) {
+// 轮询同步结果
+async function pollSyncResult(commandId, clientId) {
   const maxAttempts = 30
   const interval = 1000
 
@@ -1262,14 +1465,12 @@ async function pollCommandResult(commandId) {
         const cmd = res.command
 
         if (cmd.status === 'completed') {
-          hardwareInfo.value = cmd.result
-          // 如果 Drawer 已打开，不打开对话框
-          if (!detailDrawerVisible.value) {
-            hardwareDialogVisible.value = true
-          }
+          ElMessage.success('硬件信息同步成功')
+          // 刷新客户端列表以更新硬件信息
+          await loadClients()
           return
         } else if (cmd.status === 'failed' || cmd.status === 'timeout') {
-          ElMessage.error(cmd.error || '命令执行失败')
+          ElMessage.error(cmd.error || '同步失败')
           return
         }
       }
@@ -1280,7 +1481,34 @@ async function pollCommandResult(commandId) {
     await new Promise(resolve => setTimeout(resolve, interval))
   }
 
-  ElMessage.error('获取硬件信息超时')
+  ElMessage.warning('同步超时，请稍后查看')
+}
+
+// 获取硬件信息（从数据库）
+async function getHardwareInfo(clientId) {
+  const targetClientId = clientId || currentDetailClientId.value
+  if (!targetClientId) return
+
+  hardwareLoading.value[targetClientId] = true
+  currentClientId.value = targetClientId
+
+  try {
+    const res = await api.getClientHardwareInfo(targetClientId)
+
+    if (res.success && res.hardware_info) {
+      hardwareInfo.value = res.hardware_info
+      // 如果 Drawer 已打开，不打开对话框
+      if (!detailDrawerVisible.value && !clientId) {
+        hardwareDialogVisible.value = true
+      }
+    } else {
+      ElMessage.warning(res.message || '暂无硬件信息')
+    }
+  } catch (error) {
+    ElMessage.error('获取硬件信息失败: ' + (error.message || '未知错误'))
+  } finally {
+    hardwareLoading.value[targetClientId] = false
+  }
 }
 
 // 格式化运行时间
@@ -1753,5 +1981,40 @@ onMounted(() => {
 
 .status-text {
   white-space: nowrap;
+}
+
+/* 新增样式：配置信息和主机名 */
+.hostname-text {
+  color: var(--tech-text-primary);
+  font-weight: 500;
+}
+
+.os-text {
+  color: var(--tech-text-secondary);
+  font-size: 13px;
+}
+
+.config-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.config-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--tech-text-secondary);
+}
+
+.config-item .el-icon {
+  font-size: 14px;
+  color: var(--tech-info);
+}
+
+.offline-text {
+  color: var(--tech-text-secondary);
+  font-size: 13px;
 }
 </style>

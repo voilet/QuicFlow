@@ -16,6 +16,7 @@ import (
 	"github.com/voilet/quic-flow/pkg/command"
 	"github.com/voilet/quic-flow/pkg/config"
 	"github.com/voilet/quic-flow/pkg/dispatcher"
+	"github.com/voilet/quic-flow/pkg/hardware"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/recording"
@@ -295,6 +296,32 @@ func runServer(cmd *cobra.Command, args []string) {
 	releaseAPI := releaseapi.NewReleaseAPIWithRemote(releaseDB, commandManager)
 	httpServer.AddReleaseRoutes(releaseAPI)
 
+	// ========== 硬件信息功能 ==========
+	// 创建硬件存储和 API 处理器
+	var hardwareStore *hardware.Store
+	var hardwareAPI *hardware.Handler
+	if releaseDB != nil {
+		hardwareStore = hardware.NewStore(releaseDB)
+		hardwareAPI = hardware.NewHandler(hardwareStore)
+
+		// 设置到 HTTP Server（用于客户端列表整合设备信息）
+		httpServer.SetHardwareStore(hardwareStore)
+
+		// 注册硬件 API 路由
+		hardwareRouter := httpServer.GetRouter().Group("/api")
+		hardwareAPI.RegisterRoutes(hardwareRouter)
+
+		// 注册命令结果处理器，自动保存硬件信息
+		commandManager.RegisterResultHandler(hardware.NewCommandResultHandler(hardwareStore))
+
+		// 启动硬件信息上报处理 goroutine（处理客户端自动上报的硬件信息）
+		go processHardwareReports(hardwareStore, logger)
+
+		logger.Info("Hardware info system enabled with database")
+	} else {
+		logger.Info("Hardware info system disabled (database not configured)")
+	}
+
 	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit store
 	setupAPI.SetOnDBReady(func(db *gorm.DB) {
 		releaseAPI.SetDB(db)
@@ -319,6 +346,24 @@ func runServer(cmd *cobra.Command, args []string) {
 			terminalManager.SetRecordingDBStore(newRecordingDBStore)
 			recordingAPI.SetDBStore(newRecordingDBStore)
 			logger.Info("Recording database store updated via setup")
+		}
+
+		// 初始化硬件信息系统
+		if hardwareStore == nil {
+			hardwareStore = hardware.NewStore(db)
+			hardwareAPI = hardware.NewHandler(hardwareStore)
+
+			// 设置到 HTTP Server（用于客户端列表整合设备信息）
+			httpServer.SetHardwareStore(hardwareStore)
+
+			hardwareRouter := httpServer.GetRouter().Group("/api")
+			hardwareAPI.RegisterRoutes(hardwareRouter)
+			commandManager.RegisterResultHandler(hardware.NewCommandResultHandler(hardwareStore))
+
+			// 启动硬件信息上报处理 goroutine
+			go processHardwareReports(hardwareStore, logger)
+
+			logger.Info("Hardware info system enabled via setup")
 		}
 	})
 
@@ -552,8 +597,35 @@ func initDatabase(cfg *config.ServerConfig, logger *monitoring.Logger) (*gorm.DB
 		if err := releasemodels.Migrate(db); err != nil {
 			return nil, fmt.Errorf("database migration failed: %w", err)
 		}
+
+		// 修复硬件表的列名问题
+		if err := hardware.AutoMigrateFixes(db); err != nil {
+			logger.Warn("Failed to apply hardware migration fixes", "error", err)
+		}
+
 		logger.Info("Database migrations completed")
 	}
 
 	return db, nil
+}
+
+// processHardwareReports 处理客户端硬件信息自动上报
+func processHardwareReports(store *hardware.Store, logger *monitoring.Logger) {
+	reportChan := GetHardwareReportChan()
+
+	for report := range reportChan {
+		// 解析硬件信息
+		var hwInfo command.HardwareInfoResult
+		if err := json.Unmarshal(report.HardwareInfo, &hwInfo); err != nil {
+			logger.Warn("Failed to parse hardware report", "client_id", report.ClientID, "error", err)
+			continue
+		}
+
+		// 保存到数据库
+		if _, err := store.SaveHardwareInfo(report.ClientID, &hwInfo); err != nil {
+			logger.Warn("Failed to save hardware report", "client_id", report.ClientID, "error", err)
+		} else {
+			logger.Info("Hardware report saved", "client_id", report.ClientID, "report_type", report.ReportType)
+		}
+	}
 }

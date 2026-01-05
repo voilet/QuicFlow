@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/voilet/quic-flow/pkg/command"
+	"github.com/voilet/quic-flow/pkg/hardware"
 	"github.com/voilet/quic-flow/pkg/monitoring"
 	"github.com/voilet/quic-flow/pkg/protocol"
 	"github.com/voilet/quic-flow/pkg/session"
@@ -32,6 +33,7 @@ type HTTPServer struct {
 	router         *gin.Engine
 	serverAPI      ServerAPI
 	commandManager *command.CommandManager
+	hardwareStore  *hardware.Store // 硬件信息存储
 	logger         *monitoring.Logger
 	listenAddr     string
 }
@@ -81,6 +83,16 @@ func NewHTTPServer(addr string, serverAPI ServerAPI, commandManager *command.Com
 	return h
 }
 
+// SetHardwareStore 设置硬件信息存储（供外部调用）
+func (h *HTTPServer) SetHardwareStore(store *hardware.Store) {
+	h.hardwareStore = store
+}
+
+// GetRouter 获取路由器（供外部注册路由）
+func (h *HTTPServer) GetRouter() *gin.Engine {
+	return h.router
+}
+
 // loggerMiddleware 日志中间件
 func (h *HTTPServer) loggerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -127,12 +139,31 @@ func (h *HTTPServer) GetAPIGroup() *gin.RouterGroup {
 	return h.router.Group("/api")
 }
 
-// ClientDetail 客户端详情
+// ClientDetail 客户端详情（整合设备和会话信息）
 type ClientDetail struct {
-	ClientID    string `json:"client_id"`
-	RemoteAddr  string `json:"remote_addr"`
-	ConnectedAt int64  `json:"connected_at"`
-	Uptime      string `json:"uptime"`
+	// === 基本信息 ===
+	ClientID  string `json:"client_id"`
+	Hostname  string `json:"hostname"`  // 主机名
+	OS        string `json:"os"`        // 操作系统
+	Arch      string `json:"arch"`      // 架构
+
+	// === 硬件信息 ===
+	CPUModel      string  `json:"cpu_model"`       // CPU 型号
+	CPUCores      int     `json:"cpu_cores"`       // CPU 核心数
+	MemoryGB      float64 `json:"memory_gb"`       // 内存 GB
+	DiskTB        float64 `json:"disk_tb"`         // 磁盘 TB
+	PrimaryMAC    string  `json:"primary_mac"`     // 主 MAC 地址
+
+	// === 在线状态 ===
+	Online       bool   `json:"online"`           // 是否在线
+	RemoteAddr   string `json:"remote_addr"`      // 远程地址
+	ConnectedAt  int64  `json:"connected_at"`     // 连接时间（毫秒）
+	Uptime       string `json:"uptime"`           // 在线时长
+	LastSeenAt   *int64 `json:"last_seen_at"`     // 最后在线时间
+
+	// === 状态 ===
+	Status       string `json:"status"`           // online, offline, unknown
+	FirstSeenAt  int64  `json:"first_seen_at"`    // 首次发现时间
 }
 
 // ListClientsResponse 客户端列表响应
@@ -144,7 +175,9 @@ type ListClientsResponse struct {
 }
 
 // handleListClients 处理获取客户端列表请求
+// 整合数据库设备信息和当前会话状态
 // 支持分页: ?offset=0&limit=100
+// 支持状态筛选: ?status=online
 func (h *HTTPServer) handleListClients(c *gin.Context) {
 	// 解析分页参数
 	offset := 0
@@ -162,29 +195,103 @@ func (h *HTTPServer) handleListClients(c *gin.Context) {
 		}
 	}
 
-	// 使用优化的一次遍历方法获取客户端详情
-	var clients []session.ClientInfoBrief
-	var total int64
+	// 解析状态筛选
+	statusFilter := c.Query("status") // online, offline, all
 
-	if limit > 0 {
-		// 分页查询
-		clients, total = h.serverAPI.ListClientsWithDetailsPaginated(offset, limit)
-	} else {
-		// 全量查询
-		clients = h.serverAPI.ListClientsWithDetails()
-		total = int64(len(clients))
+	// 获取当前在线的客户端（用于标记在线状态）
+	onlineClients := make(map[string]session.ClientInfoBrief)
+	for _, client := range h.serverAPI.ListClientsWithDetails() {
+		onlineClients[client.ClientID] = client
 	}
 
-	// 转换为响应格式（添加 uptime 计算）
 	now := time.Now()
-	details := make([]ClientDetail, len(clients))
-	for i, client := range clients {
-		uptime := now.Sub(time.UnixMilli(client.ConnectedAt))
-		details[i] = ClientDetail{
-			ClientID:    client.ClientID,
-			RemoteAddr:  client.RemoteAddr,
-			ConnectedAt: client.ConnectedAt,
-			Uptime:      uptime.Round(time.Second).String(),
+	var details []ClientDetail
+	var total int64
+
+	// 如果有 hardware store，从数据库获取设备信息
+	if h.hardwareStore != nil {
+		var devices []hardware.Device
+		var err error
+
+		// 根据状态筛选
+		if statusFilter == "online" {
+			devices, total, err = h.hardwareStore.ListDevicesByStatus("online", offset, limit)
+		} else if statusFilter == "offline" {
+			devices, total, err = h.hardwareStore.ListDevicesByStatus("offline", offset, limit)
+		} else {
+			// 获取所有设备
+			devices, total, err = h.hardwareStore.ListDevices(offset, limit)
+		}
+
+		if err == nil {
+			details = make([]ClientDetail, len(devices))
+			for i, device := range devices {
+				// 在线状态由实际会话决定（如果存在会话则在线，否则使用数据库状态）
+				onlineClient, hasSession := onlineClients[device.ClientID]
+				actualStatus := device.Status
+				if hasSession {
+					actualStatus = "online"
+				}
+
+				detail := ClientDetail{
+					ClientID:     device.ClientID,
+					Hostname:     device.Hostname,
+					OS:           device.OS,
+					Arch:         device.KernelArch,
+					CPUModel:     device.CPUModel,
+					CPUCores:     0, // 从 FullHardwareInfo 获取
+					MemoryGB:     device.MemoryTotalGB,
+					DiskTB:       device.DiskTotalTB,
+					PrimaryMAC:   device.PrimaryMAC,
+					Online:       hasSession, // 有会话才是真正在线
+					Status:       actualStatus, // 实际状态
+					FirstSeenAt:  device.FirstSeenAt.UnixMilli(),
+				}
+
+				// 从 FullHardwareInfo 获取 CPU 核心数
+				if device.FullHardwareInfo.CPUCoreCount > 0 {
+					detail.CPUCores = device.FullHardwareInfo.CPUCoreCount
+				}
+
+				// 如果当前在线，填充会话信息
+				if hasSession {
+					detail.RemoteAddr = onlineClient.RemoteAddr
+					detail.ConnectedAt = onlineClient.ConnectedAt
+					uptime := now.Sub(time.UnixMilli(onlineClient.ConnectedAt))
+					detail.Uptime = uptime.Round(time.Second).String()
+				}
+
+				// 最后在线时间
+				if device.LastSeenAt != nil {
+					ts := device.LastSeenAt.UnixMilli()
+					detail.LastSeenAt = &ts
+				}
+
+				details[i] = detail
+			}
+		}
+	} else {
+		// 没有 database，只返回当前在线的客户端
+		var clients []session.ClientInfoBrief
+
+		if limit > 0 {
+			clients, total = h.serverAPI.ListClientsWithDetailsPaginated(offset, limit)
+		} else {
+			clients = h.serverAPI.ListClientsWithDetails()
+			total = int64(len(clients))
+		}
+
+		details = make([]ClientDetail, len(clients))
+		for i, client := range clients {
+			uptime := now.Sub(time.UnixMilli(client.ConnectedAt))
+			details[i] = ClientDetail{
+				ClientID:    client.ClientID,
+				Online:      true,
+				RemoteAddr:  client.RemoteAddr,
+				ConnectedAt: client.ConnectedAt,
+				Uptime:      uptime.Round(time.Second).String(),
+				Status:      "online",
+			}
 		}
 	}
 
@@ -636,11 +743,6 @@ func (h *HTTPServer) AddReleaseRoutes(releaseAPI ReleaseAPIRegistrar) {
 	api := h.router.Group("/api")
 	releaseAPI.RegisterRoutes(api)
 	h.logger.Info("Release API routes added")
-}
-
-// GetRouter 返回 gin.Engine 路由器（用于外部注册更多路由）
-func (h *HTTPServer) GetRouter() *gin.Engine {
-	return h.router
 }
 
 // AddSetupRoutes 添加数据库初始化引导路由

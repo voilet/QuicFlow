@@ -27,6 +27,11 @@ export const api = {
     return request.get(`/clients/${clientId}`)
   },
 
+  // 获取客户端硬件信息（从数据库）
+  getClientHardwareInfo(clientId) {
+    return request.get(`/hardware/devices/${clientId}/hardware`)
+  },
+
   // 消息发送
   sendMessage(data) {
     return request.post('/send', data)

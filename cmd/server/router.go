@@ -41,6 +41,9 @@ func SetupServerRouter(logger *monitoring.Logger) *router.Router {
 	// report.heartbeat - 应用层心跳
 	r.Register("report.heartbeat", handleAppHeartbeat)
 
+	// report.hardware - 客户端硬件信息自动上报（连接时/重连时）
+	r.Register("report.hardware", handleHardwareReport)
+
 	// command.result - 命令执行结果（异步回调）
 	r.Register("command.result", handleCommandResult)
 
@@ -333,4 +336,41 @@ func GetCommandResult(commandID string) (json.RawMessage, bool) {
 	defer commandResults.RUnlock()
 	result, ok := commandResults.data[commandID]
 	return result, ok
+}
+
+// ==================== 硬件信息上报 ====================
+
+// HardwareReport 硬件信息上报结构
+type HardwareReport struct {
+	ClientID     string          `json:"client_id"`
+	CommandType  string          `json:"command_type"`
+	HardwareInfo json.RawMessage `json:"hardware_info"`
+	ReportType   string          `json:"report_type"` // auto_sync, manual
+}
+
+// hardwareReportChan 硬件信息上报 channel
+var hardwareReportChan = make(chan HardwareReport, 100)
+
+// handleHardwareReport 处理客户端硬件信息自动上报
+func handleHardwareReport(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+	var report HardwareReport
+	if err := json.Unmarshal(payload, &report); err != nil {
+		return nil, fmt.Errorf("invalid hardware report: %w", err)
+	}
+
+	// 将上报信息放入 channel（异步处理）
+	select {
+	case hardwareReportChan <- report:
+	default:
+		// channel 满，丢弃上报（避免阻塞）
+	}
+
+	return json.Marshal(map[string]interface{}{
+		"ack": true,
+	})
+}
+
+// GetHardwareReportChan 获取硬件信息上报 channel（供 main.go 读取）
+func GetHardwareReportChan() <-chan HardwareReport {
+	return hardwareReportChan
 }

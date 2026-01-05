@@ -19,6 +19,21 @@ type ServerAPI interface {
 	SendToWithPromise(clientID string, msg *protocol.DataMessage, timeout time.Duration) (*callback.Promise, error)
 }
 
+// CommandResultHandler 命令结果处理器接口
+// 用于在命令完成时执行自定义逻辑（如保存硬件信息）
+type CommandResultHandler interface {
+	// OnCommandCompleted 命令完成时调用
+	OnCommandCompleted(cmd *Command)
+}
+
+// CommandResultHandlerFunc 命令结果处理函数类型
+type CommandResultHandlerFunc func(cmd *Command)
+
+// OnCommandCompleted 实现 CommandResultHandler 接口
+func (f CommandResultHandlerFunc) OnCommandCompleted(cmd *Command) {
+	f(cmd)
+}
+
 // MultiCommandTask 多播任务信息
 type MultiCommandTask struct {
 	TaskID     string
@@ -42,6 +57,10 @@ type CommandManager struct {
 	// 多播任务跟踪
 	multiTasks map[string]*MultiCommandTask // taskID -> MultiCommandTask
 	tasksMu    sync.RWMutex
+
+	// 命令结果处理器列表
+	resultHandlers []CommandResultHandler
+	handlersMu     sync.RWMutex
 
 	// 清理配置
 	cleanupInterval time.Duration
@@ -208,7 +227,33 @@ func (cm *CommandManager) updateCommandStatus(commandID string, status CommandSt
 	if status == CommandStatusCompleted || status == CommandStatusFailed || status == CommandStatusTimeout || status == CommandStatusCancelled {
 		now := time.Now()
 		cmd.CompletedAt = &now
+
+		// 调用所有结果处理器（异步，避免阻塞）
+		cm.callResultHandlers(cmd)
 	}
+}
+
+// callResultHandlers 调用所有结果处理器
+func (cm *CommandManager) callResultHandlers(cmd *Command) {
+	cm.handlersMu.RLock()
+	handlers := make([]CommandResultHandler, len(cm.resultHandlers))
+	copy(handlers, cm.resultHandlers)
+	cm.handlersMu.RUnlock()
+
+	if len(handlers) > 0 {
+		go func(c *Command) {
+			for _, handler := range handlers {
+				handler.OnCommandCompleted(c)
+			}
+		}(cmd)
+	}
+}
+
+// RegisterResultHandler 注册命令结果处理器
+func (cm *CommandManager) RegisterResultHandler(handler CommandResultHandler) {
+	cm.handlersMu.Lock()
+	defer cm.handlersMu.Unlock()
+	cm.resultHandlers = append(cm.resultHandlers, handler)
 }
 
 // GetCommand 查询命令状态

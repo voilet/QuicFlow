@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/voilet/quic-flow/pkg/hardware"
 )
 
 // ==================== 枚举类型 ====================
@@ -1525,4 +1527,7 @@ var AllModels = []interface{}{
 	&ServiceDependency{},
 	&ProcessReport{},
 	&ContainerReport{},
+	// 硬件信息模型（简化版，不包含 device_disks 和 device_nics）
+	&hardware.Device{},
+	&hardware.DeviceHardwareHistory{},
 }

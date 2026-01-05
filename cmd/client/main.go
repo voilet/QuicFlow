@@ -153,19 +153,6 @@ func runClient(cmd *cobra.Command, args []string) {
 	config.InsecureSkipVerify = insecure
 	config.Logger = logger
 
-	// 设置事件钩子
-	config.Hooks = &monitoring.EventHooks{
-		OnConnect: func(clientID string) {
-			logger.Info("Connected to server", "client_id", clientID)
-		},
-		OnDisconnect: func(clientID string, reason error) {
-			logger.Warn("Disconnected from server", "client_id", clientID, "reason", reason)
-		},
-		OnReconnect: func(clientID string, attemptCount int) {
-			logger.Info("Reconnected to server", "client_id", clientID, "attempts", attemptCount)
-		},
-	}
-
 	// 创建客户端
 	c, err := client.NewClient(config)
 	if err != nil {
@@ -202,6 +189,14 @@ func runClient(cmd *cobra.Command, args []string) {
 		logger.Info("SSH service available for remote access (via receiveLoop)")
 	}
 	logger.Info("Press Ctrl+C to stop")
+
+	// 连接成功后自动上报硬件信息
+	go func() {
+		time.Sleep(1 * time.Second) // 等待连接完全建立
+		if c.IsConnected() {
+			reportHardwareInfo(c, logger)
+		}
+	}()
 
 	// 注意：SSH 流现在由 receiveLoop 中的 SSH handler 处理，不再需要单独的 AcceptSSHStreams
 
@@ -459,4 +454,62 @@ func shutdown(logger *monitoring.Logger, disp *dispatcher.Dispatcher, c *client.
 	}
 
 	logger.Info("Client stopped gracefully")
+}
+
+// reportHardwareInfo 上报硬件信息到服务器
+func reportHardwareInfo(c *client.Client, logger *monitoring.Logger) {
+	// 等待一小段时间确保连接完全建立
+	time.Sleep(500 * time.Millisecond)
+
+	ctx := context.Background()
+
+	// 获取硬件信息
+	result, err := handlers.GetHardwareInfo(ctx, nil)
+	if err != nil {
+		logger.Warn("Failed to get hardware info for reporting", "error", err)
+		return
+	}
+
+	// 解析 result 以获取实际的硬件信息对象（避免 base64 编码）
+	var hwInfo command.HardwareInfoResult
+	if err := json.Unmarshal(result, &hwInfo); err != nil {
+		logger.Warn("Failed to parse hardware info", "error", err)
+		return
+	}
+
+	// 构建上报消息（使用 report.hardware 命令格式）
+	reportMsg := map[string]interface{}{
+		"client_id":      c.GetClientID(),
+		"command_type":   "hardware.info",
+		"hardware_info":  hwInfo, // 使用解析后的对象，而不是 []byte
+		"report_type":    "auto_sync", // 标识为自动同步
+	}
+
+	// 构建命令载荷（使用 router 的命令格式）
+	cmdPayload := map[string]interface{}{
+		"command_type": "report.hardware",
+		"payload":      reportMsg,
+	}
+	payloadBytes, _ := json.Marshal(cmdPayload)
+
+	msg := &protocol.DataMessage{
+		MsgId:      generateMsgID(),
+		SenderId:   c.GetClientID(),
+		ReceiverId: "server",
+		Type:       protocol.MessageType_MESSAGE_TYPE_EVENT,
+		Payload:    payloadBytes,
+		Timestamp:  time.Now().UnixMilli(),
+	}
+
+	// 发送消息
+	if err := c.SendMessageAsync(msg); err != nil {
+		logger.Warn("Failed to report hardware info", "error", err)
+	} else {
+		logger.Info("Hardware info reported to server")
+	}
+}
+
+// generateMsgID 生成消息ID
+func generateMsgID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

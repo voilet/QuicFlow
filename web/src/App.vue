@@ -7,7 +7,7 @@
     <!-- 侧边栏 -->
     <el-aside width="240px" class="app-aside">
       <div class="logo">
-        <h2>QUIC 命令管理</h2>
+        <h2>PantheonQuic</h2>
       </div>
       <el-menu
         :default-active="$route.path"
@@ -118,7 +118,7 @@ const pageTitle = computed(() => {
     '/release': '发布管理',
     '/setup': '数据库设置'
   }
-  return titles[route.path] || 'QUIC 命令管理系统'
+  return titles[route.path] || 'Pantheon Quic　管理系统'
 })
 
 const dbStatus = computed(() => {
