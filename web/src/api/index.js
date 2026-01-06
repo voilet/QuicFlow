@@ -833,6 +833,11 @@ export const api = {
     return request.post(`/release/callbacks/${id}/test`, { channel_type: channelType })
   },
 
+  // 直接测试回调（不保存配置）
+  testCallbackDirect(data) {
+    return request.post('/release/callbacks/test-direct', data)
+  },
+
   // 获取回调历史列表
   getCallbackHistory(params = {}) {
     return request.get('/release/callbacks/history', { params })

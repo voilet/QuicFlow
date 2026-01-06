@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/voilet/quic-flow/pkg/release/callback"
@@ -465,6 +466,116 @@ func (api *ReleaseAPI) TestCallbackConfig(c *gin.Context) {
 			"channel": req.ChannelType,
 			"payload": testPayload,
 		},
+	})
+}
+
+// TestCallbackDirect 直接测试回调配置（不保存）
+// @Summary 直接测试回调配置
+// @Tags callback
+// @Accept json
+// @Produce json
+// @Param config body object true "回调配置"
+// @Success 200
+// @Router /api/v1/release/callbacks/test-direct [post]
+func (api *ReleaseAPI) TestCallbackDirect(c *gin.Context) {
+	var req struct {
+		ChannelType   models.CallbackType `json:"channel_type"`
+		ChannelConfig struct {
+			Feishu   *models.FeishuCallbackConfig   `json:"feishu,omitempty"`
+			DingTalk *models.DingTalkCallbackConfig `json:"dingtalk,omitempty"`
+			WeChat   *models.WeChatCallbackConfig   `json:"wechat,omitempty"`
+		} `json:"channel_config"`
+		ProjectName string `json:"project_name"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// 构造测试消息
+	testPayload := models.CallbackPayload{
+		EventType:   models.CallbackEventFullCompleted,
+		Timestamp:   time.Now(),
+		Environment: "test",
+		Project: models.CallbackProject{
+			ID:          "test-project-id",
+			Name:        req.ProjectName,
+			Description: "测试回调消息",
+		},
+		Version: models.CallbackVersion{
+			ID:          "test-version-id",
+			Name:        "v1.0.0-test",
+			Description: "测试版本",
+		},
+		Task: models.CallbackTask{
+			ID:     "test-task-id",
+			Type:   models.OperationTypeDeploy,
+			Status: "success",
+		},
+		Deployment: models.CallbackDeployment{
+			TotalCount:     10,
+			CompletedCount: 10,
+			FailedCount:    0,
+			Hosts:          []string{"test-host-1", "test-host-2"},
+		},
+	}
+
+	// 根据渠道类型发送测试消息
+	var err error
+	switch req.ChannelType {
+	case models.CallbackTypeFeishu:
+		if req.ChannelConfig.Feishu == nil || req.ChannelConfig.Feishu.WebhookURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "Feishu webhook URL is required",
+			})
+			return
+		}
+		notifier := callback.NewFeishuNotifier(req.ChannelConfig.Feishu)
+		err = notifier.Send(testPayload)
+	case models.CallbackTypeDingTalk:
+		if req.ChannelConfig.DingTalk == nil || req.ChannelConfig.DingTalk.WebhookURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "DingTalk webhook URL is required",
+			})
+			return
+		}
+		notifier := callback.NewDingTalkNotifier(req.ChannelConfig.DingTalk)
+		err = notifier.Send(testPayload)
+	case models.CallbackTypeWeChat:
+		if req.ChannelConfig.WeChat == nil || req.ChannelConfig.WeChat.CorpID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "WeChat config is required",
+			})
+			return
+		}
+		notifier := callback.NewWeChatNotifier(req.ChannelConfig.WeChat)
+		err = notifier.Send(testPayload)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Unsupported channel type",
+		})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Test message sent successfully",
 	})
 }
 

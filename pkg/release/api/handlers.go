@@ -183,6 +183,7 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 		release.PUT("/callbacks/:id", api.UpdateCallbackConfig)
 		release.DELETE("/callbacks/:id", api.DeleteCallbackConfig)
 		release.POST("/callbacks/:id/test", api.TestCallbackConfig)
+		release.POST("/callbacks/test-direct", api.TestCallbackDirect) // 直接测试（不保存）
 
 		// 回调历史
 		release.GET("/callbacks/history", api.ListCallbackHistory)

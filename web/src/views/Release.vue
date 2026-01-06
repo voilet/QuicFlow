@@ -683,6 +683,117 @@
             />
           </el-form-item>
         </template>
+
+        <!-- 回调通知配置 -->
+        <el-divider content-position="left">
+          <span style="display: flex; align-items: center; gap: 6px;">
+            <el-icon><Bell /></el-icon>
+            发布通知
+          </span>
+        </el-divider>
+
+        <el-form-item label="启用通知">
+          <el-switch v-model="projectForm.callback_config.enabled" />
+          <span class="form-tip ml-2">发布完成后自动发送通知</span>
+        </el-form-item>
+
+        <template v-if="projectForm.callback_config.enabled">
+          <el-form-item label="通知渠道">
+            <el-radio-group v-model="projectForm.callback_config.channel_type">
+              <el-radio value="feishu">
+                <span style="display: flex; align-items: center; gap: 4px;">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                  </svg>
+                  飞书
+                </span>
+              </el-radio>
+              <el-radio value="dingtalk">
+                <span style="display: flex; align-items: center; gap: 4px;">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.03-1.99 1.27-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.42-1.43-.88.03-.24.37-.49 1.02-.75 3.98-1.73 6.64-2.87 7.97-3.44 3.8-1.6 4.59-1.88 5.1-1.89.11 0 .37.03.54.18.14.12.18.28.2.45-.01.06.01.24 0 .38z"/>
+                  </svg>
+                  钉钉
+                </span>
+              </el-radio>
+              <el-radio value="wechat">
+                <span style="display: flex; align-items: center; gap: 4px;">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.032zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
+                  </svg>
+                  企业微信
+                </span>
+              </el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <!-- 飞书配置 -->
+          <template v-if="projectForm.callback_config.channel_type === 'feishu'">
+            <el-form-item label="Webhook URL" required>
+              <el-input
+                v-model="projectForm.callback_config.feishu.webhook_url"
+                placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+              />
+              <div class="form-tip">
+                <a href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot" target="_blank" rel="noopener">
+                  如何创建飞书机器人？
+                </a>
+              </div>
+            </el-form-item>
+            <el-form-item label="签名密钥">
+              <el-input
+                v-model="projectForm.callback_config.feishu.sign_secret"
+                type="password"
+                show-password
+                placeholder="可选，用于消息签名验证"
+              />
+            </el-form-item>
+          </template>
+
+          <!-- 钉钉配置 -->
+          <template v-if="projectForm.callback_config.channel_type === 'dingtalk'">
+            <el-form-item label="Webhook URL" required>
+              <el-input
+                v-model="projectForm.callback_config.dingtalk.webhook_url"
+                placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
+              />
+            </el-form-item>
+            <el-form-item label="签名密钥">
+              <el-input
+                v-model="projectForm.callback_config.dingtalk.sign_secret"
+                type="password"
+                show-password
+                placeholder="可选，加签密钥"
+              />
+            </el-form-item>
+          </template>
+
+          <!-- 企微配置 -->
+          <template v-if="projectForm.callback_config.channel_type === 'wechat'">
+            <el-form-item label="Webhook URL" required>
+              <el-input
+                v-model="projectForm.callback_config.wechat.webhook_url"
+                placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+              />
+            </el-form-item>
+          </template>
+
+          <el-form-item label="通知事件">
+            <el-checkbox-group v-model="projectForm.callback_config.events">
+              <el-checkbox value="canary_started">金丝雀开始</el-checkbox>
+              <el-checkbox value="canary_completed">金丝雀完成</el-checkbox>
+              <el-checkbox value="full_completed">全量完成</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+
+          <el-form-item>
+            <el-button @click="testProjectCallback" :loading="testingCallback" :disabled="!canTestCallback">
+              <el-icon><VideoPlay /></el-icon>
+              测试通知
+            </el-button>
+            <span class="form-tip ml-2" v-if="!canTestCallback">请先填写 Webhook URL</span>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="projectDialogVisible = false">取消</el-button>
@@ -2161,7 +2272,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion,
-  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check, SuccessFilled
+  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check, SuccessFilled, Bell
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -2176,6 +2287,7 @@ const loadingTasks = ref(false)
 const loadingLogs = ref(false)
 const loadingGlobalStats = ref(false)
 const submitting = ref(false)
+const testingCallback = ref(false)
 
 const projects = ref([])
 const versions = ref([])
@@ -2302,6 +2414,27 @@ const projectForm = reactive({
     kube_context: '',
     pre_script: '',
     post_script: ''
+  },
+  // 回调通知配置
+  callback_config: {
+    enabled: false,
+    name: '默认回调配置',
+    channel_type: 'feishu',
+    events: ['canary_completed', 'full_completed'],
+    // 飞书配置
+    feishu: {
+      webhook_url: '',
+      sign_secret: ''
+    },
+    // 钉钉配置
+    dingtalk: {
+      webhook_url: '',
+      sign_secret: ''
+    },
+    // 企微配置
+    wechat: {
+      webhook_url: ''
+    }
   }
 })
 
@@ -2705,6 +2838,22 @@ const environmentPreviewData = computed(() => {
   return result.sort((a, b) => a.key.localeCompare(b.key))
 })
 
+// 是否可以测试回调
+const canTestCallback = computed(() => {
+  const cfg = projectForm.callback_config
+  if (!cfg.enabled) return false
+  switch (cfg.channel_type) {
+    case 'feishu':
+      return !!cfg.feishu.webhook_url
+    case 'dingtalk':
+      return !!cfg.dingtalk.webhook_url
+    case 'wechat':
+      return !!cfg.wechat.webhook_url
+    default:
+      return false
+  }
+})
+
 // ==================== 数据加载 ====================
 async function loadData() {
   loading.value = true
@@ -2868,7 +3017,72 @@ function showCreateProject() {
     pre_script: '',
     post_script: ''
   }
+  // 重置回调配置
+  resetCallbackConfig()
   projectDialogVisible.value = true
+}
+
+// 重置回调配置
+function resetCallbackConfig() {
+  projectForm.callback_config = {
+    enabled: false,
+    name: '默认回调配置',
+    channel_type: 'feishu',
+    events: ['canary_completed', 'full_completed'],
+    feishu: {
+      webhook_url: '',
+      sign_secret: ''
+    },
+    dingtalk: {
+      webhook_url: '',
+      sign_secret: ''
+    },
+    wechat: {
+      webhook_url: ''
+    }
+  }
+}
+
+// 测试项目回调配置
+async function testProjectCallback() {
+  const cfg = projectForm.callback_config
+  if (!canTestCallback.value) {
+    ElMessage.warning('请先填写 Webhook URL')
+    return
+  }
+
+  testingCallback.value = true
+  try {
+    // 构建测试回调配置
+    const channelConfig = {}
+    switch (cfg.channel_type) {
+      case 'feishu':
+        channelConfig.feishu = cfg.feishu
+        break
+      case 'dingtalk':
+        channelConfig.dingtalk = cfg.dingtalk
+        break
+      case 'wechat':
+        channelConfig.wechat = cfg.wechat
+        break
+    }
+
+    const res = await api.testCallbackDirect({
+      channel_type: cfg.channel_type,
+      channel_config: channelConfig,
+      project_name: projectForm.name || '测试项目'
+    })
+
+    if (res.success) {
+      ElMessage.success('测试消息发送成功，请检查对应渠道')
+    } else {
+      ElMessage.error(res.error || '测试失败')
+    }
+  } catch (e) {
+    ElMessage.error('测试失败: ' + (e.message || e))
+  } finally {
+    testingCallback.value = false
+  }
 }
 
 async function saveProject() {
@@ -2912,6 +3126,13 @@ async function handleProjectAction(action, project) {
     // 加载 K8s 配置
     if (project.k8s_config) {
       Object.assign(projectForm.k8s_config, project.k8s_config)
+    }
+    // 加载回调配置
+    if (project.callback_config) {
+      Object.assign(projectForm.callback_config, project.callback_config)
+    } else {
+      // 重置回调配置
+      resetCallbackConfig()
     }
     projectDialogVisible.value = true
   } else if (action === 'delete') {
