@@ -356,7 +356,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	httpServer.AddStandardProfilingRoutes(stdProfilingHandler)
 	logger.Info("Standard pprof enabled at /debug/pprof/ (use 'go tool pprof http://host:port/debug/pprof/profile?seconds=30')")
 
-	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit store
+	// ========== 文件传输功能 ==========
+	_, _, _, fileAPI := SetupFileTransfer(releaseDB, logger)
+	if fileAPI != nil {
+		AddFileTransferRoutes(httpServer, fileAPI)
+		logger.Info("File transfer system enabled")
+	}
+
+	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit_store
 	setupAPI.SetOnDBReady(func(db *gorm.DB) {
 		releaseAPI.SetDB(db)
 		releaseAPI.SetRemoteExecutor(commandManager)

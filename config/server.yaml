@@ -74,3 +74,37 @@ tls:
     # Session Ticket 密钥轮换间隔（小时）
     # 建议每 24 小时轮换一次
     key_rotation_interval: 24
+filetransfer:
+    enabled: true
+    # 存储根路径
+    storage_root: "./data/quic-files"
+    # 路径模板，支持变量: {date}, {year}, {month}, {day}, {user}, {project}, {timestamp}
+    path_template: "{date}/{user}"
+    # 单文件大小限制（字节，0=无限制）
+    max_file_size: 10737418240  # 10GB
+    # 存储配额（字节）
+    storage_quota: 1099511627776  # 1TB
+    # 用户配额（字节）
+    user_quota: 107374182400  # 100GB
+    # 最大并发传输数
+    max_concurrent_transfers: 100
+    # 传输缓冲区大小（字节）
+    buffer_size: 65536  # 64KB
+    # 分块大小（字节）
+    chunk_size: 1048576  # 1MB
+    # 上传线程数
+    upload_threads: 4
+    # 下载线程数
+    download_threads: 4
+    # 是否启用压缩
+    compression: false
+    # 是否校验校验和
+    checksum_verify: true
+    # 是否支持断点续传
+    resume_support: true
+    # 保留天数（0=永久）
+    retention_days: 30
+    # 是否自动清理过期文件
+    auto_cleanup: false
+    # 临时文件目录
+    temp_dir: "/tmp/quic-upload"

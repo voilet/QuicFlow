@@ -46,6 +46,10 @@
           <el-icon><TrendCharts /></el-icon>
           <span>性能分析</span>
         </el-menu-item>
+        <el-menu-item index="/filetransfer">
+          <el-icon><Files /></el-icon>
+          <span>文件传输</span>
+        </el-menu-item>
         <el-menu-item index="/setup" class="setup-menu-item">
           <el-icon><Setting /></el-icon>
           <span>数据库设置</span>
@@ -119,7 +123,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, ArrowDown, Message, SwitchButton, TrendCharts } from '@element-plus/icons-vue'
+import { User, ArrowDown, Message, SwitchButton, TrendCharts, Files } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { request } from '@/api'
 
@@ -153,6 +157,7 @@ const pageTitle = computed(() => {
     '/recordings': '会话录像',
     '/release': '发布管理',
     '/profiling': '性能分析',
+    '/filetransfer': '文件传输',
     '/setup': '数据库设置'
   }
   return titles[route.path] || 'Pantheon Quic　管理系统'

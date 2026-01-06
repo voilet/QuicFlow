@@ -61,6 +61,12 @@ const routes = [
     name: 'Profiling',
     component: () => import('@/views/Profiling.vue'),
     meta: { title: '性能分析' }
+  },
+  {
+    path: '/filetransfer',
+    name: 'FileTransfer',
+    component: () => import('@/views/FileTransfer.vue'),
+    meta: { title: '文件传输' }
   }
 ]
 
