@@ -42,6 +42,14 @@
           <el-icon><Upload /></el-icon>
           <span>发布管理</span>
         </el-menu-item>
+        <el-menu-item index="/callback-config">
+          <el-icon><Bell /></el-icon>
+          <span>回调配置</span>
+        </el-menu-item>
+        <el-menu-item index="/callback-history">
+          <el-icon><Clock /></el-icon>
+          <span>回调历史</span>
+        </el-menu-item>
         <el-menu-item index="/profiling">
           <el-icon><TrendCharts /></el-icon>
           <span>性能分析</span>
@@ -123,7 +131,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, ArrowDown, Message, SwitchButton, TrendCharts, Files } from '@element-plus/icons-vue'
+import { User, ArrowDown, Message, SwitchButton, TrendCharts, Files, Bell, Clock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { request } from '@/api'
 
@@ -156,6 +164,8 @@ const pageTitle = computed(() => {
     '/audit': '命令审计',
     '/recordings': '会话录像',
     '/release': '发布管理',
+    '/callback-config': '回调配置',
+    '/callback-history': '回调历史',
     '/profiling': '性能分析',
     '/filetransfer': '文件传输',
     '/setup': '数据库设置'

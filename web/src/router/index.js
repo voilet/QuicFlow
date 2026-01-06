@@ -57,6 +57,18 @@ const routes = [
     meta: { title: '发布管理' }
   },
   {
+    path: '/callback-config',
+    name: 'CallbackConfig',
+    component: () => import('@/views/CallbackConfig.vue'),
+    meta: { title: '回调配置' }
+  },
+  {
+    path: '/callback-history',
+    name: 'CallbackHistory',
+    component: () => import('@/views/CallbackHistory.vue'),
+    meta: { title: '回调历史' }
+  },
+  {
     path: '/profiling',
     name: 'Profiling',
     component: () => import('@/views/Profiling.vue'),

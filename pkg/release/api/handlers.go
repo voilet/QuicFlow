@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/voilet/quic-flow/pkg/git"
+	"github.com/voilet/quic-flow/pkg/release/callback"
 	"github.com/voilet/quic-flow/pkg/release/engine"
 	"github.com/voilet/quic-flow/pkg/release/executor"
 	"github.com/voilet/quic-flow/pkg/release/models"
@@ -20,23 +22,26 @@ import (
 
 // ReleaseAPI 发布系统 API
 type ReleaseAPI struct {
-	db     *gorm.DB
-	engine *engine.Engine
+	db            *gorm.DB
+	engine        *engine.Engine
+	callbackMgr   *callback.Manager
 }
 
 // NewReleaseAPI 创建发布系统 API
 func NewReleaseAPI(db *gorm.DB) *ReleaseAPI {
 	return &ReleaseAPI{
-		db:     db,
-		engine: engine.NewEngine(db),
+		db:          db,
+		engine:      engine.NewEngine(db),
+		callbackMgr: callback.NewManager(db),
 	}
 }
 
 // NewReleaseAPIWithRemote 创建支持远程执行的发布系统 API
 func NewReleaseAPIWithRemote(db *gorm.DB, cmdSender executor.CommandSender) *ReleaseAPI {
 	return &ReleaseAPI{
-		db:     db,
-		engine: engine.NewEngineWithRemote(db, cmdSender),
+		db:          db,
+		engine:      engine.NewEngineWithRemote(db, cmdSender),
+		callbackMgr: callback.NewManager(db),
 	}
 }
 
@@ -170,6 +175,35 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 
 		// 配置预览（显示合并后的最终配置）
 		release.POST("/config-preview", api.PreviewDeployConfig)
+
+		// 回调配置管理
+		release.POST("/projects/:id/callbacks", api.CreateCallbackConfig)
+		release.GET("/projects/:id/callbacks", api.ListCallbackConfigs)
+		release.GET("/callbacks/:id", api.GetCallbackConfig)
+		release.PUT("/callbacks/:id", api.UpdateCallbackConfig)
+		release.DELETE("/callbacks/:id", api.DeleteCallbackConfig)
+		release.POST("/callbacks/:id/test", api.TestCallbackConfig)
+
+		// 回调历史
+		release.GET("/callbacks/history", api.ListCallbackHistory)
+		release.GET("/callbacks/history/:id", api.GetCallbackHistory)
+		release.POST("/callbacks/history/:id/retry", api.RetryCallbackHistory)
+		release.GET("/callbacks/stats", api.GetCallbackStats)
+		release.GET("/tasks/:id/callbacks", api.ListTaskCallbackHistory)
+
+		// 模板管理
+		release.POST("/callbacks/template/preview", api.PreviewCallbackTemplate)
+		release.POST("/callbacks/template/validate", api.ValidateCallbackTemplate)
+		release.GET("/callbacks/template/variables", api.GetCallbackTemplateVariables)
+		release.GET("/callbacks/template/defaults", api.GetDefaultCallbackTemplates)
+
+		// 消息模板 CRUD
+		release.GET("/templates", api.ListMessageTemplates)
+		release.GET("/templates/:id", api.GetMessageTemplate)
+		release.POST("/templates", api.CreateMessageTemplate)
+		release.PUT("/templates/:id", api.UpdateMessageTemplate)
+		release.DELETE("/templates/:id", api.DeleteMessageTemplate)
+		release.POST("/templates/:id/copy", api.CopyMessageTemplate)
 	}
 }
 
@@ -1558,6 +1592,22 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 	// 写入任务开始日志
 	api.writeTaskLog(task.ID, "", "info", "init", "部署任务开始执行")
 
+	// 触发金丝雀开始回调
+	if task.CanaryEnabled && task.Status == "canary" {
+		// 获取环境名称
+		var environmentName string
+		var env models.Environment
+		if err := api.db.First(&env, "id IN (SELECT environment_id FROM targets WHERE client_id = ?)", task.ClientIDs[0]).Error; err == nil {
+			environmentName = env.Name
+		}
+
+		// 异步触发回调，避免阻塞部署流程
+		go func() {
+			ctx := context.Background()
+			api.callbackMgr.TriggerCanaryStarted(ctx, task, &project, &version, environmentName)
+		}()
+	}
+
 	// 确定要执行的客户端
 	var clientsToExecute []string
 	if task.CanaryEnabled && task.Status == "canary" {
@@ -1835,6 +1885,51 @@ func (api *ReleaseAPI) executeDeployTask(task *models.DeployTask) {
 					"status":       "active",
 					"deploy_count": gorm.Expr("deploy_count + ?", task.SuccessCount),
 				})
+		}
+
+		// 触发全部发布完成回调
+		// 获取环境名称
+		var environmentName string
+		var env models.Environment
+		if err := api.db.First(&env, "id IN (SELECT environment_id FROM targets WHERE client_id = ?)", task.ClientIDs[0]).Error; err == nil {
+			environmentName = env.Name
+		}
+
+		// 异步触发回调，避免阻塞部署流程
+		go func() {
+			ctx := context.Background()
+			// 重新获取最新任务状态
+			latestTask := &models.DeployTask{}
+			if err := api.db.First(latestTask, "id = ?", task.ID).Error; err == nil {
+				api.callbackMgr.TriggerFullCompleted(ctx, latestTask, &project, &version, environmentName)
+			}
+		}()
+	} else {
+		// 金丝雀阶段完成
+		api.writeTaskLog(task.ID, "", "info", "canary", "金丝雀阶段完成，等待推广或手动触发全量发布")
+
+		// 触发金丝雀完成回调
+		// 获取环境名称
+		var environmentName string
+		var env models.Environment
+		if err := api.db.First(&env, "id IN (SELECT environment_id FROM targets WHERE client_id = ?)", task.ClientIDs[0]).Error; err == nil {
+			environmentName = env.Name
+		}
+
+		// 异步触发回调，避免阻塞部署流程
+		go func() {
+			ctx := context.Background()
+			// 重新获取最新任务状态
+			latestTask := &models.DeployTask{}
+			if err := api.db.First(latestTask, "id = ?", task.ID).Error; err == nil {
+				api.callbackMgr.TriggerCanaryCompleted(ctx, latestTask, &project, &version, environmentName)
+			}
+		}()
+
+		// 如果配置了自动推广，则自动触发全量发布
+		if task.CanaryAutoPromote {
+			api.writeTaskLog(task.ID, "", "info", "canary", "自动推广已启用，将在 "+strconv.Itoa(task.CanaryDuration)+" 分钟后自动推广")
+			// TODO: 实现延迟自动推广逻辑
 		}
 	}
 	api.db.Save(task)

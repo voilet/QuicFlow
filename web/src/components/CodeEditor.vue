@@ -100,12 +100,29 @@ onMounted(async () => {
   // 等待 DOM 渲染完成
   await nextTick()
   
+  let retryCount = 0
+  const maxRetries = 10 // 最大重试次数，避免无限循环
+  let initTimer = null
+  
   // 对于对话框中的情况，需要更长的等待时间
   // 使用 MutationObserver 或多次重试确保容器已完全渲染
   const initEditor = async () => {
+    // 清除之前的定时器，避免重复执行
+    if (initTimer) {
+      clearTimeout(initTimer)
+      initTimer = null
+    }
+    
+    retryCount++
+    
+    if (retryCount > maxRetries) {
+      console.warn('CodeEditor: Max retries reached, giving up initialization')
+      return
+    }
+    
     if (!editorContainer.value) {
       // 如果容器还不存在，稍后重试
-      setTimeout(initEditor, 100)
+      initTimer = setTimeout(initEditor, 100)
       return
     }
 
@@ -120,9 +137,11 @@ onMounted(async () => {
       editorContainer.value.style.boxSizing = 'border-box'
     }
     
-    if (rect.width === 0 || rect.height === 0) {
-      // 如果容器还没有尺寸，稍后重试
-      setTimeout(initEditor, 100)
+    // 对于对话框中的编辑器，如果高度为0但宽度不为0，也可以尝试初始化
+    // Monaco Editor 的 automaticLayout 会在容器有尺寸后自动调整
+    if (rect.width === 0) {
+      // 如果容器还没有宽度，稍后重试
+      initTimer = setTimeout(initEditor, 100)
       return
     }
 
@@ -169,40 +188,36 @@ onMounted(async () => {
         emit('update:modelValue', editor.getValue())
       })
 
-      // 确保编辑器正确布局
-      const doLayout = () => {
-        if (editor && editorContainer.value) {
-          const rect = editorContainer.value.getBoundingClientRect()
-          if (rect.width > 0 && rect.height > 0) {
-            editor.layout()
-          } else {
-            setTimeout(doLayout, 50)
-          }
+      // 确保编辑器正确布局（只尝试一次，automaticLayout 会自动处理）
+      if (editor && editorContainer.value) {
+        const rect = editorContainer.value.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          editor.layout()
+        } else {
+          // 如果高度为0，等待一下再布局（对话框可能还在动画中）
+          setTimeout(() => {
+            if (editor && editorContainer.value) {
+              const newRect = editorContainer.value.getBoundingClientRect()
+              if (newRect.width > 0 && newRect.height > 0) {
+                editor.layout()
+              }
+            }
+          }, 100)
         }
       }
-      
-      setTimeout(doLayout, 50)
-      setTimeout(doLayout, 200)
-      setTimeout(doLayout, 500)
     } catch (error) {
       console.error('CodeEditor: Failed to create editor', error)
-      // 如果创建失败，稍后重试（最多重试5次）
-      let retryCount = 0
-      const retryInit = () => {
-        if (retryCount < 5) {
-          retryCount++
-          setTimeout(initEditor, 200 * retryCount)
-        }
+      // 如果创建失败，稍后重试
+      if (retryCount < maxRetries) {
+        initTimer = setTimeout(initEditor, 200)
       }
-      retryInit()
     }
   }
 
-  // 开始初始化（多次尝试以确保在对话框中正确渲染）
-  setTimeout(initEditor, 50)
-  setTimeout(initEditor, 200)
-  setTimeout(initEditor, 500)
-  setTimeout(initEditor, 1000)
+  // 开始初始化（使用 requestAnimationFrame 确保在下一帧执行）
+  requestAnimationFrame(() => {
+    initEditor()
+  })
 })
 
 onBeforeUnmount(() => {

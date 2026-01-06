@@ -574,6 +574,11 @@ export const api = {
     return request.delete(`/release/versions/${id}`)
   },
 
+  // 获取项目安装信息（已安装客户端列表）
+  getProjectInstallations(projectId, params = {}) {
+    return request.get(`/release/projects/${projectId}/installations`, { params })
+  },
+
   // ===== 部署任务管理 =====
 
   // 获取项目部署任务列表
@@ -794,6 +799,119 @@ export const api = {
   // 下载采集文件
   downloadProfile(id) {
     return `/api/profiling/profiles/${id}/download`
+  },
+
+  // ===== 回调配置管理 API =====
+
+  // 获取项目的回调配置列表
+  getCallbackConfigs(projectId) {
+    return request.get(`/release/projects/${projectId}/callbacks`)
+  },
+
+  // 获取回调配置详情
+  getCallbackConfig(id) {
+    return request.get(`/release/callbacks/${id}`)
+  },
+
+  // 创建回调配置
+  createCallbackConfig(projectId, data) {
+    return request.post(`/release/projects/${projectId}/callbacks`, data)
+  },
+
+  // 更新回调配置
+  updateCallbackConfig(id, data) {
+    return request.put(`/release/callbacks/${id}`, data)
+  },
+
+  // 删除回调配置
+  deleteCallbackConfig(id) {
+    return request.delete(`/release/callbacks/${id}`)
+  },
+
+  // 测试回调配置
+  testCallbackConfig(id, channelType) {
+    return request.post(`/release/callbacks/${id}/test`, { channel_type: channelType })
+  },
+
+  // 获取回调历史列表
+  getCallbackHistory(params = {}) {
+    return request.get('/release/callbacks/history', { params })
+  },
+
+  // 获取任务的回调历史
+  getTaskCallbackHistory(taskId) {
+    return request.get(`/release/tasks/${taskId}/callbacks`)
+  },
+
+  // 获取回调历史详情
+  getCallbackHistoryDetail(id) {
+    return request.get(`/release/callbacks/history/${id}`)
+  },
+
+  // 重试失败的回调
+  retryCallbackHistory(id) {
+    return request.post(`/release/callbacks/history/${id}/retry`)
+  },
+
+  // 获取回调统计
+  getCallbackStats(params = {}) {
+    return request.get('/release/callbacks/stats', { params })
+  },
+
+  // ==================== 模板管理 API ====================
+
+  // 预览模板
+  previewCallbackTemplate(template) {
+    return request.post('/release/callbacks/template/preview', { template })
+  },
+
+  // 验证模板
+  validateCallbackTemplate(template) {
+    return request.post('/release/callbacks/template/validate', { template })
+  },
+
+  // 获取模板变量列表
+  getCallbackTemplateVariables() {
+    return request.get('/release/callbacks/template/variables')
+  },
+
+  // 获取默认模板
+  getDefaultCallbackTemplates() {
+    return request.get('/release/callbacks/template/defaults')
+  },
+
+  // ==================== 消息模板管理 API ====================
+
+  // 获取模板列表
+  getMessageTemplates(params = {}) {
+    return request.get('/release/templates', { params })
+  },
+
+  // 获取模板详情
+  getMessageTemplate(id) {
+    return request.get(`/release/templates/${id}`)
+  },
+
+  // 创建模板
+  createMessageTemplate(data, projectId = null) {
+    const params = projectId ? { project_id: projectId } : {}
+    return request.post('/release/templates', data, { params })
+  },
+
+  // 更新模板
+  updateMessageTemplate(id, data) {
+    return request.put(`/release/templates/${id}`, data)
+  },
+
+  // 删除模板
+  deleteMessageTemplate(id) {
+    return request.delete(`/release/templates/${id}`)
+  },
+
+  // 复制模板
+  copyMessageTemplate(id, projectId = null) {
+    const params = projectId ? { project_id: projectId } : {}
+    return request.post(`/release/templates/${id}/copy`, {}, { params })
   },
 
   /**

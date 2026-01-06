@@ -1095,6 +1095,10 @@ type DeployTask struct {
 	// 任务覆盖配置（用于金丝雀、A/B测试、紧急扩容等场景）
 	OverrideConfig *TaskOverrideConfig `gorm:"type:jsonb" json:"override_config,omitempty"`
 
+	// 回调通知配置
+	CallbackConfigID string      `gorm:"type:uuid;index" json:"callback_config_id,omitempty"`
+	CallbackEvents   StringSlice `gorm:"type:jsonb" json:"callback_events,omitempty"` // canary_started, canary_completed, full_completed
+
 	// 任务状态
 	Status       string `gorm:"size:20;default:'pending';index" json:"status"` // pending, scheduled, running, canary, paused, completed, failed, cancelled
 	TotalCount   int    `gorm:"default:0" json:"total_count"`
@@ -1527,6 +1531,10 @@ var AllModels = []interface{}{
 	&ServiceDependency{},
 	&ProcessReport{},
 	&ContainerReport{},
+	// 回调功能模型
+	&CallbackConfig{},
+	&CallbackHistory{},
+	&MessageTemplate{},
 	// 硬件信息模型（简化版，不包含 device_disks 和 device_nics）
 	&hardware.Device{},
 	&hardware.DeviceHardwareHistory{},

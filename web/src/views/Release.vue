@@ -114,8 +114,8 @@
               </el-col>
               <el-col :span="8">
                 <div class="stat-card">
-                  <div class="stat-value">{{ clients.length }}</div>
-                  <div class="stat-label">在线客户端</div>
+                  <div class="stat-value">{{ globalDeployStats?.version_count || 0 }}</div>
+                  <div class="stat-label">总版本数</div>
                 </div>
               </el-col>
             </el-row>
@@ -1258,6 +1258,7 @@
 
           <el-form-item label="追加环境变量" v-if="taskForm.operation !== 'uninstall'">
             <CodeEditor
+              v-if="taskDialogVisible"
               v-model="taskForm.container_env"
               language="properties"
               height="100px"
@@ -1334,6 +1335,7 @@
 
           <el-form-item label="追加环境变量" v-if="taskForm.operation !== 'uninstall' && taskForm.operation !== 'rollback'">
             <CodeEditor
+              v-if="taskDialogVisible"
               v-model="taskForm.container_env"
               language="properties"
               height="100px"
@@ -1378,25 +1380,18 @@
 
         <el-divider content-position="left">目标选择</el-divider>
 
-        <el-form-item label="目标客户端" prop="client_ids">
-          <el-select
-            v-model="taskForm.client_ids"
-            multiple
-            filterable
-            placeholder="选择目标客户端"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="client in availableClients"
-              :key="client.client_id"
-              :label="getClientLabel(client)"
-              :value="client.client_id"
-            />
-          </el-select>
+        <el-form-item label="目标客户端" prop="client_ids_text">
+          <el-input
+            v-model="taskForm.client_ids_text"
+            type="textarea"
+            :rows="6"
+            placeholder="请输入客户端ID，每行一个&#10;例如：&#10;client-001&#10;client-002&#10;client-003"
+            style="font-family: monospace;"
+          />
           <div class="form-tip">
-            <el-button link type="primary" @click="selectAllClients">全选</el-button>
-            <el-button link @click="taskForm.client_ids = []">清空</el-button>
-            <span class="ml-2">已选 {{ taskForm.client_ids.length }} 个</span>
+            <el-button link type="primary" @click="selectAllClients">填充所有客户端</el-button>
+            <el-button link @click="taskForm.client_ids_text = ''">清空</el-button>
+            <span class="ml-2">已输入 {{ getClientIdsCount() }} 个客户端ID</span>
           </div>
         </el-form-item>
 
@@ -1446,6 +1441,63 @@
           <el-form-item label="自动全量">
             <el-switch v-model="taskForm.canary_auto_promote" />
             <span class="form-tip ml-2">观察期结束后自动全量发布（否则需手动确认）</span>
+          </el-form-item>
+        </template>
+
+        <el-divider content-position="left">回调通知</el-divider>
+
+        <el-form-item label="启用回调">
+          <el-switch v-model="taskForm.callback_enabled" />
+          <span class="form-tip ml-2">发布完成后发送通知（飞书/钉钉/企微等）</span>
+        </el-form-item>
+
+        <template v-if="taskForm.callback_enabled">
+          <el-form-item label="回调配置">
+            <el-select
+              v-model="taskForm.callback_config_id"
+              placeholder="选择回调配置"
+              clearable
+              :loading="loadingCallbackConfigs"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="cfg in projectCallbackConfigs"
+                :key="cfg.id"
+                :label="cfg.name"
+                :value="cfg.id"
+              >
+                <div class="callback-option">
+                  <span>{{ cfg.name }}</span>
+                  <el-tag size="small" type="info" class="ml-2">
+                    {{ getChannelLabels(cfg.channels) }}
+                  </el-tag>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="form-tip">
+              <span v-if="projectCallbackConfigs.length === 0">
+                暂无回调配置，
+                <el-button link type="primary" @click="goToCallbackConfig">去配置</el-button>
+              </span>
+              <span v-else>
+                选择要使用的回调配置，发布事件将推送到配置的渠道
+              </span>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="通知事件" v-if="taskForm.callback_config_id">
+            <el-checkbox-group v-model="taskForm.callback_events">
+              <el-checkbox value="canary_started" v-if="taskForm.canary_enabled">
+                <el-icon><VideoPlay /></el-icon> 金丝雀开始
+              </el-checkbox>
+              <el-checkbox value="canary_completed" v-if="taskForm.canary_enabled">
+                <el-icon><Check /></el-icon> 金丝雀完成
+              </el-checkbox>
+              <el-checkbox value="full_completed">
+                <el-icon><SuccessFilled /></el-icon> 全量完成
+              </el-checkbox>
+            </el-checkbox-group>
+            <div class="form-tip">选择需要推送通知的发布事件</div>
           </el-form-item>
         </template>
 
@@ -2104,15 +2156,18 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion,
-  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check
+  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check, SuccessFilled
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
 import { DockerConfigDialog } from '@/components/docker'
+
+const router = useRouter()
 
 // ==================== 状态 ====================
 const loading = ref(false)
@@ -2129,7 +2184,7 @@ const deployLogs = ref([])
 const deployStats = ref(null)
 const globalDeployStats = ref(null)
 const globalRecentLogs = ref([])
-const clients = ref([])
+// 已移除 clients 变量，客户端列表改为按需从项目安装信息获取
 
 const selectedProject = ref(null)
 const selectedVersion = ref(null)
@@ -2306,9 +2361,14 @@ const versionRules = {
   // install_script 不再是必须的，因为 Git/容器/K8s 项目不需要
 }
 
+// 项目回调配置列表
+const projectCallbackConfigs = ref([])
+const loadingCallbackConfigs = ref(false)
+
 const taskForm = reactive({
   operation: 'deploy',
   client_ids: [],
+  client_ids_text: '', // 客户端ID文本输入（每行一个）
   schedule_type: 'immediate',
   schedule_time: null,
   canary_enabled: true,
@@ -2317,6 +2377,10 @@ const taskForm = reactive({
   canary_auto_promote: false,
   failure_strategy: 'continue',
   auto_rollback: true,
+  // 回调通知配置
+  callback_enabled: true,
+  callback_config_id: '', // 选择的回调配置ID
+  callback_events: ['canary_completed', 'full_completed'], // 启用的事件类型
   // 向后兼容字段
   container_image: '',
   container_env: '',
@@ -2351,7 +2415,24 @@ const taskForm = reactive({
 
 const taskRules = {
   operation: [{ required: true, message: '请选择操作类型', trigger: 'change' }],
-  client_ids: [{ required: true, type: 'array', min: 1, message: '请选择目标客户端', trigger: 'change' }]
+  client_ids_text: [
+    { required: true, message: '请输入目标客户端ID', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!value || !value.trim()) {
+          callback(new Error('请输入至少一个客户端ID'))
+          return
+        }
+        const ids = value.split('\n').map(line => line.trim()).filter(line => line.length > 0)
+        if (ids.length === 0) {
+          callback(new Error('请输入至少一个客户端ID'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }
+  ]
 }
 
 // 定时执行快捷选项
@@ -2398,12 +2479,7 @@ const filteredTasks = computed(() => {
   return tasks.value.filter(t => t.status === taskStatusFilter.value)
 })
 
-const availableClients = computed(() => {
-  // 根据操作类型筛选客户端
-  // install: 未安装的客户端
-  // update/rollback/uninstall: 已安装的客户端
-  return clients.value
-})
+// 已移除 availableClients 计算属性，客户端通过多行文本输入，不再需要下拉列表
 
 // 判断是否有高级 Docker 配置
 const hasAdvancedDockerConfig = computed(() => {
@@ -2417,13 +2493,38 @@ const hasAdvancedDockerConfig = computed(() => {
          cfg.devices?.length > 0
 })
 
+// 辅助函数：解析环境变量字符串（优化性能）
+function parseEnvString(envStr) {
+  if (!envStr || typeof envStr !== 'string') return {}
+  const env = {}
+  // 使用正则表达式一次性匹配，避免多次字符串操作
+  const lines = envStr.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line || line.startsWith('#')) continue
+    const idx = line.indexOf('=')
+    if (idx > 0) {
+      const key = line.substring(0, idx).trim()
+      const value = line.substring(idx + 1).trim()
+      if (key) {
+        env[key] = value
+      }
+    }
+  }
+  return env
+}
+
 // 配置预览 - 合并后的最终配置
 const mergedConfigPreview = computed(() => {
   const project = selectedProject.value
   const version = selectedVersion.value
-  const task = taskForm
-
+  
+  // 早期返回，避免不必要的计算
   if (!project) return {}
+
+  // 使用局部变量访问 taskForm，减少响应式追踪
+  const overrideConfig = taskForm.override_config
+  const taskContainerEnv = taskForm.container_env
 
   const result = {
     image: '',
@@ -2455,9 +2556,9 @@ const mergedConfigPreview = computed(() => {
     if (version?.deploy_config?.resources?.memory_limit) result.memoryLimit = version.deploy_config.resources.memory_limit
 
     // 任务级覆盖
-    if (task.override_config?.image) result.image = task.override_config.image
-    if (task.override_config?.resources?.cpu_limit) result.cpuLimit = task.override_config.resources.cpu_limit
-    if (task.override_config?.resources?.memory_limit) result.memoryLimit = task.override_config.resources.memory_limit
+    if (overrideConfig?.image) result.image = overrideConfig.image
+    if (overrideConfig?.resources?.cpu_limit) result.cpuLimit = overrideConfig.resources.cpu_limit
+    if (overrideConfig?.resources?.memory_limit) result.memoryLimit = overrideConfig.resources.memory_limit
   } else if (project.type === 'kubernetes') {
     // 项目级配置
     result.image = project.k8s_config?.image || ''
@@ -2480,32 +2581,22 @@ const mergedConfigPreview = computed(() => {
     if (version?.deploy_config?.resources?.memory_limit) result.memoryLimit = version.deploy_config.resources.memory_limit
 
     // 任务级覆盖
-    if (task.override_config?.image) result.image = task.override_config.image
-    if (task.override_config?.replicas) result.replicas = task.override_config.replicas
-    if (task.override_config?.resources?.cpu_request) result.cpuRequest = task.override_config.resources.cpu_request
-    if (task.override_config?.resources?.cpu_limit) result.cpuLimit = task.override_config.resources.cpu_limit
-    if (task.override_config?.resources?.memory_request) result.memoryRequest = task.override_config.resources.memory_request
-    if (task.override_config?.resources?.memory_limit) result.memoryLimit = task.override_config.resources.memory_limit
+    if (overrideConfig?.image) result.image = overrideConfig.image
+    if (overrideConfig?.replicas) result.replicas = overrideConfig.replicas
+    if (overrideConfig?.resources?.cpu_request) result.cpuRequest = overrideConfig.resources.cpu_request
+    if (overrideConfig?.resources?.cpu_limit) result.cpuLimit = overrideConfig.resources.cpu_limit
+    if (overrideConfig?.resources?.memory_request) result.memoryRequest = overrideConfig.resources.memory_request
+    if (overrideConfig?.resources?.memory_limit) result.memoryLimit = overrideConfig.resources.memory_limit
   }
 
-  // 合并版本环境变量
+  // 合并版本环境变量（优化：使用辅助函数）
   if (version?.container_env) {
-    version.container_env.split('\n').forEach(line => {
-      const idx = line.indexOf('=')
-      if (idx > 0) {
-        result.environment[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
-      }
-    })
+    Object.assign(result.environment, parseEnvString(version.container_env))
   }
 
-  // 合并任务环境变量
-  if (task.container_env) {
-    task.container_env.split('\n').forEach(line => {
-      const idx = line.indexOf('=')
-      if (idx > 0) {
-        result.environment[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
-      }
-    })
+  // 合并任务环境变量（优化：使用辅助函数）
+  if (taskContainerEnv) {
+    Object.assign(result.environment, parseEnvString(taskContainerEnv))
   }
 
   return result
@@ -2515,14 +2606,17 @@ const mergedConfigPreview = computed(() => {
 const configPreviewSource = computed(() => {
   const project = selectedProject.value
   const version = selectedVersion.value
-  const task = taskForm
+  
+  // 早期返回
+  if (!project) return {}
+
+  // 使用局部变量访问 taskForm，减少响应式追踪
+  const overrideConfig = taskForm.override_config
 
   const source = {}
 
-  if (!project) return source
-
   // 镜像来源
-  if (task.override_config?.image) {
+  if (overrideConfig?.image) {
     source.image = 'task'
   } else if (version?.container_image) {
     source.image = 'version'
@@ -2532,7 +2626,7 @@ const configPreviewSource = computed(() => {
 
   // 副本数来源 (K8s)
   if (project.type === 'kubernetes') {
-    if (task.override_config?.replicas) {
+    if (overrideConfig?.replicas) {
       source.replicas = 'task'
     } else if (version?.deploy_config?.replicas) {
       source.replicas = 'version'
@@ -2542,7 +2636,7 @@ const configPreviewSource = computed(() => {
   }
 
   // CPU Limit 来源
-  if (task.override_config?.resources?.cpu_limit) {
+  if (overrideConfig?.resources?.cpu_limit) {
     source.cpuLimit = 'task'
   } else if (version?.deploy_config?.resources?.cpu_limit) {
     source.cpuLimit = 'version'
@@ -2551,7 +2645,7 @@ const configPreviewSource = computed(() => {
   }
 
   // Memory Limit 来源
-  if (task.override_config?.resources?.memory_limit) {
+  if (overrideConfig?.resources?.memory_limit) {
     source.memoryLimit = 'task'
   } else if (version?.deploy_config?.resources?.memory_limit) {
     source.memoryLimit = 'version'
@@ -2566,12 +2660,14 @@ const configPreviewSource = computed(() => {
 const environmentPreviewData = computed(() => {
   const project = selectedProject.value
   const version = selectedVersion.value
-  const task = taskForm
+  
+  // 早期返回
+  if (!project) return []
 
-  const result = []
+  // 使用局部变量访问 taskForm，减少响应式追踪
+  const taskContainerEnv = taskForm.container_env
+
   const envSources = {}
-
-  if (!project) return result
 
   // 收集项目环境变量
   const projectEnv = project.type === 'container'
@@ -2583,34 +2679,28 @@ const environmentPreviewData = computed(() => {
     }
   }
 
-  // 收集版本环境变量
+  // 收集版本环境变量（优化：使用辅助函数）
   if (version?.container_env) {
-    version.container_env.split('\n').forEach(line => {
-      const idx = line.indexOf('=')
-      if (idx > 0) {
-        const key = line.substring(0, idx).trim()
-        const value = line.substring(idx + 1).trim()
-        envSources[key] = { value, source: 'version' }
-      }
-    })
+    const versionEnv = parseEnvString(version.container_env)
+    for (const [key, value] of Object.entries(versionEnv)) {
+      envSources[key] = { value, source: 'version' }
+    }
   }
 
-  // 收集任务环境变量
-  if (task.container_env) {
-    task.container_env.split('\n').forEach(line => {
-      const idx = line.indexOf('=')
-      if (idx > 0) {
-        const key = line.substring(0, idx).trim()
-        const value = line.substring(idx + 1).trim()
-        envSources[key] = { value, source: 'task' }
-      }
-    })
+  // 收集任务环境变量（优化：使用辅助函数）
+  if (taskContainerEnv) {
+    const taskEnv = parseEnvString(taskContainerEnv)
+    for (const [key, value] of Object.entries(taskEnv)) {
+      envSources[key] = { value, source: 'task' }
+    }
   }
 
-  // 转换为数组
-  for (const [key, data] of Object.entries(envSources)) {
-    result.push({ key, value: data.value, source: data.source })
-  }
+  // 转换为数组并排序
+  const result = Object.entries(envSources).map(([key, data]) => ({
+    key,
+    value: data.value,
+    source: data.source
+  }))
 
   return result.sort((a, b) => a.key.localeCompare(b.key))
 })
@@ -2619,7 +2709,8 @@ const environmentPreviewData = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    await Promise.all([loadProjects(), loadClients(), loadGlobalStats()])
+    // 只加载项目列表和全局统计，客户端ID通过文本框输入
+    await Promise.all([loadProjects(), loadGlobalStats()])
   } finally {
     loading.value = false
   }
@@ -2633,15 +2724,6 @@ async function loadProjects() {
     }
   } catch (e) {
     projects.value = []
-  }
-}
-
-async function loadClients() {
-  try {
-    const res = await api.getClients()
-    clients.value = res.clients || []
-  } catch (e) {
-    clients.value = []
   }
 }
 
@@ -3104,6 +3186,7 @@ function showCreateTask(version) {
     taskForm.operation = 'install'
   }
   taskForm.client_ids = []
+  taskForm.client_ids_text = ''
   taskForm.schedule_type = 'immediate'
   taskForm.schedule_time = null
   taskForm.canary_enabled = true
@@ -3127,7 +3210,8 @@ function showCreateTask(version) {
   taskForm.run_post_script = true
   taskForm.git_force = false
   // 重置 override_config（新版三层配置）
-  taskForm.override_config = {
+  // 使用 Object.assign 避免替换整个对象，减少响应式更新
+  Object.assign(taskForm.override_config, {
     image: '',
     environment_add: {},
     resources: {
@@ -3138,24 +3222,118 @@ function showCreateTask(version) {
     },
     replicas: null,
     command: []
+  })
+  // 重置回调配置
+  taskForm.callback_enabled = true
+  taskForm.callback_config_id = ''
+  taskForm.callback_events = ['canary_completed', 'full_completed']
+  // 加载项目回调配置
+  loadProjectCallbackConfigs()
+  // 客户端ID通过多行文本框输入，不再自动加载客户端列表
+
+  // 使用 nextTick 延迟对话框显示，避免在大量响应式更新时立即打开
+  // 这样可以确保所有计算属性都已完成更新，避免卡顿
+  nextTick(() => {
+    taskDialogVisible.value = true
+  })
+}
+
+// 加载项目回调配置
+async function loadProjectCallbackConfigs() {
+  if (!selectedProject.value?.id) {
+    projectCallbackConfigs.value = []
+    return
+  }
+  loadingCallbackConfigs.value = true
+  try {
+    const res = await api.getCallbackConfigs(selectedProject.value.id)
+    if (res.success) {
+      projectCallbackConfigs.value = res.data || []
+      // 如果有配置，默认选择第一个
+      if (projectCallbackConfigs.value.length > 0 && !taskForm.callback_config_id) {
+        taskForm.callback_config_id = projectCallbackConfigs.value[0].id
+      }
+    } else {
+      projectCallbackConfigs.value = []
+    }
+  } catch (e) {
+    projectCallbackConfigs.value = []
+  } finally {
+    loadingCallbackConfigs.value = false
+  }
+}
+
+// 获取渠道标签显示
+function getChannelLabels(channels) {
+  if (!channels || channels.length === 0) return '无渠道'
+  const typeMap = {
+    feishu: '飞书',
+    dingtalk: '钉钉',
+    wechat: '企微',
+    custom: '自定义'
+  }
+  return channels
+    .filter(ch => ch.enabled)
+    .map(ch => typeMap[ch.type] || ch.type)
+    .join('/')
+}
+
+// 跳转到回调配置页面
+function goToCallbackConfig() {
+  if (selectedProject.value?.id) {
+    router.push(`/release/callbacks?project_id=${selectedProject.value.id}`)
+  } else {
+    router.push('/release/callbacks')
+  }
+}
+
+async function selectAllClients() {
+  // 从项目安装信息中获取所有已安装客户端
+  if (!selectedProject.value?.id) {
+    ElMessage.warning('请先选择项目')
+    return
   }
 
-  taskDialogVisible.value = true
+  try {
+    const res = await api.getProjectInstallations(selectedProject.value.id)
+    if (res.success && res.installations && res.installations.length > 0) {
+      const clientIds = res.installations.map(i => i.client_id).filter(id => id)
+      taskForm.client_ids_text = [...new Set(clientIds)].join('\n')
+      ElMessage.success(`已填充 ${clientIds.length} 个客户端`)
+    } else {
+      ElMessage.info('该项目暂无已安装的客户端')
+    }
+  } catch (e) {
+    ElMessage.warning('获取客户端列表失败，请手动输入')
+  }
 }
 
-function selectAllClients() {
-  taskForm.client_ids = clients.value.map(c => c.client_id)
+// 从文本输入解析客户端ID数组
+function parseClientIds() {
+  if (!taskForm.client_ids_text || !taskForm.client_ids_text.trim()) {
+    return []
+  }
+  return taskForm.client_ids_text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
 }
 
-function getClientLabel(client) {
-  // 显示客户端ID和当前安装版本
-  const version = client.installed_version
-  return version ? `${client.client_id} (当前: ${version})` : client.client_id
+// 获取客户端ID数量
+function getClientIdsCount() {
+  return parseClientIds().length
 }
 
 async function createTask() {
   const valid = await taskFormRef.value?.validate().catch(() => false)
   if (!valid) return
+
+  // 从文本输入解析客户端ID数组
+  const clientIds = parseClientIds()
+  if (clientIds.length === 0) {
+    ElMessage.warning('请输入至少一个客户端ID')
+    return
+  }
 
   submitting.value = true
   try {
@@ -3166,7 +3344,7 @@ async function createTask() {
       project_id: selectedProject.value.id,
       version_id: selectedVersion.value.id,
       operation: taskForm.operation,
-      client_ids: taskForm.client_ids,
+      client_ids: clientIds,
       schedule_type: taskForm.schedule_type,
       schedule_from: taskForm.schedule_time?.[0],
       schedule_to: taskForm.schedule_time?.[1],
@@ -3176,6 +3354,12 @@ async function createTask() {
       canary_auto_promote: taskForm.canary_auto_promote,
       failure_strategy: taskForm.failure_strategy,
       auto_rollback: taskForm.auto_rollback
+    }
+
+    // 添加回调配置
+    if (taskForm.callback_enabled && taskForm.callback_config_id) {
+      taskData.callback_config_id = taskForm.callback_config_id
+      taskData.callback_events = taskForm.callback_events
     }
 
     // 向后兼容：添加旧字段
