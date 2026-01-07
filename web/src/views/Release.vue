@@ -454,6 +454,30 @@
                   </el-table>
                 </div>
               </el-tab-pane>
+
+              <!-- Webhook 配置 -->
+              <el-tab-pane label="Webhook 配置" name="webhooks">
+                <div class="tab-header">
+                  <span class="tab-desc">配置 Git 仓库 Webhook，代码推送自动触发部署</span>
+                  <el-button type="primary" size="small" @click="goToWebhooks">
+                    <el-icon><Setting /></el-icon>
+                    配置 Webhook
+                  </el-button>
+                </div>
+                <el-empty description="点击上方按钮前往 Webhook 配置页面" :image-size="80" />
+              </el-tab-pane>
+
+              <!-- 成员管理 -->
+              <el-tab-pane label="成员管理" name="members">
+                <div class="tab-header">
+                  <span class="tab-desc">管理项目成员权限</span>
+                  <el-button type="primary" size="small" @click="goToMembers">
+                    <el-icon><User /></el-icon>
+                    管理成员
+                  </el-button>
+                </div>
+                <el-empty description="点击上方按钮前往成员管理页面" :image-size="80" />
+              </el-tab-pane>
             </el-tabs>
           </el-card>
         </template>
@@ -490,6 +514,32 @@
           <el-form-item label="工作目录">
             <el-input v-model="projectForm.gitpull_config.work_dir" placeholder="/opt/app" />
           </el-form-item>
+
+          <!-- 凭证选择 -->
+          <el-form-item label="使用凭证">
+            <el-select
+              v-model="projectForm.gitpull_config.credential_id"
+              placeholder="选择已保存的凭证（可选）"
+              clearable
+              filterable
+              @change="onGitCredentialSelected"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="cred in gitCredentials"
+                :key="cred.id"
+                :label="`${cred.name} (${cred.type})`"
+                :value="cred.id"
+              />
+              <template #footer>
+                <el-button text size="small" @click="goToCredentials">
+                  <el-icon><Plus /></el-icon>
+                  管理凭证
+                </el-button>
+              </template>
+            </el-select>
+          </el-form-item>
+
           <el-form-item label="认证方式">
             <el-select v-model="projectForm.gitpull_config.auth_type" placeholder="选择认证方式">
               <el-option label="无需认证" value="none" />
@@ -2272,7 +2322,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Refresh, MoreFilled, Download, Upload, RefreshLeft, Delete, Setting, Promotion,
-  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check, SuccessFilled, Bell
+  Document, VideoPlay, VideoPause, View, DocumentCopy, Box, Grid, Key, InfoFilled, Check, SuccessFilled, Bell, User
 } from '@element-plus/icons-vue'
 import api from '@/api'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -2296,6 +2346,8 @@ const deployLogs = ref([])
 const deployStats = ref(null)
 const globalDeployStats = ref(null)
 const globalRecentLogs = ref([])
+const gitCredentials = ref([]) // Git 凭证列表
+const dockerCredentials = ref([]) // Docker 凭证列表
 // 已移除 clients 变量，客户端列表改为按需从项目安装信息获取
 
 const selectedProject = ref(null)
@@ -2967,6 +3019,70 @@ function selectProject(project) {
   loadDeployStats()
 }
 
+// ==================== 导航方法 ====================
+function goToWebhooks() {
+  if (selectedProject.value) {
+    router.push({
+      name: 'Webhooks',
+      query: { projectId: selectedProject.value.id }
+    })
+  }
+}
+
+function goToMembers() {
+  if (selectedProject.value) {
+    router.push({
+      name: 'Members',
+      query: { projectId: selectedProject.value.id }
+    })
+  }
+}
+
+function goToCredentials() {
+  router.push({ name: 'Credentials' })
+}
+
+// ==================== 凭证管理 ====================
+async function loadGitCredentials() {
+  try {
+    const res = await api.getCredentials({ type: 'git_ssh,git_token,username_password' })
+    if (res.success) {
+      gitCredentials.value = res.data || []
+    }
+  } catch (e) {
+    console.error('Failed to load git credentials:', e)
+  }
+}
+
+async function loadDockerCredentials() {
+  try {
+    const res = await api.getCredentials({ type: 'docker_registry' })
+    if (res.success) {
+      dockerCredentials.value = res.data || []
+    }
+  } catch (e) {
+    console.error('Failed to load docker credentials:', e)
+  }
+}
+
+function onGitCredentialSelected(credentialId) {
+  if (!credentialId) {
+    // 清空选择，不自动填充
+    return
+  }
+  // 根据选择的凭证类型自动设置认证方式
+  const cred = gitCredentials.value.find(c => c.id === credentialId)
+  if (cred) {
+    if (cred.type === 'git_ssh') {
+      projectForm.gitpull_config.auth_type = 'ssh'
+    } else if (cred.type === 'git_token') {
+      projectForm.gitpull_config.auth_type = 'token'
+    } else if (cred.type === 'username_password') {
+      projectForm.gitpull_config.auth_type = 'basic'
+    }
+  }
+}
+
 // ==================== 项目管理 ====================
 function showCreateProject() {
   editingProject.value = null
@@ -2979,6 +3095,7 @@ function showCreateProject() {
     branch: 'main',
     work_dir: '',
     auth_type: 'none',
+    credential_id: '', // 凭证 ID
     ssh_key: '',
     token: '',
     username: '',
@@ -2986,6 +3103,9 @@ function showCreateProject() {
     pre_script: '',
     post_script: ''
   }
+  // 加载凭证列表
+  loadGitCredentials()
+  loadDockerCredentials()
   // 重置容器配置
   projectForm.container_config = {
     image: '',

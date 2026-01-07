@@ -197,7 +197,7 @@ func (s *UserService) GetUserByUsername(username string) (*models.SysUser, error
 }
 
 // GetUserList 获取用户列表
-func (s *UserService) GetUserList(page, pageSize int, username, nickname string) ([]*models.SysUser, int64, error) {
+func (s *UserService) GetUserList(page, pageSize int, username, nickname string, enable *uint) ([]*models.SysUser, int64, error) {
 	var users []*models.SysUser
 	var total int64
 
@@ -209,13 +209,17 @@ func (s *UserService) GetUserList(page, pageSize int, username, nickname string)
 	if nickname != "" {
 		query = query.Where("nick_name LIKE ?", "%"+nickname+"%")
 	}
+	if enable != nil {
+		query = query.Where("enable = ?", *enable)
+	}
 
 	// 统计总数
-	query.Count(&total)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// 分页查询
-	err := query.Preload("Authority").
-		Offset((page - 1) * pageSize).
+	err := query.Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Order("created_at DESC").
 		Find(&users).Error

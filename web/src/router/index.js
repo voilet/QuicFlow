@@ -69,6 +69,36 @@ const routes = [
     meta: { title: '回调历史' }
   },
   {
+    path: '/credentials',
+    name: 'Credentials',
+    component: () => import('@/views/Credentials.vue'),
+    meta: { title: '凭证中心' }
+  },
+  {
+    path: '/webhooks',
+    name: 'Webhooks',
+    component: () => import('@/views/Webhooks.vue'),
+    meta: { title: 'Webhook 配置' }
+  },
+  {
+    path: '/trigger-history',
+    name: 'TriggerHistory',
+    component: () => import('@/views/TriggerHistory.vue'),
+    meta: { title: '触发历史' }
+  },
+  {
+    path: '/project-members',
+    name: 'ProjectMembers',
+    component: () => import('@/views/Members.vue'),
+    meta: { title: '成员管理' }
+  },
+  {
+    path: '/users',
+    name: 'Users',
+    component: () => import('@/views/Users.vue'),
+    meta: { title: '用户管理' }
+  },
+  {
     path: '/profiling',
     name: 'Profiling',
     component: () => import('@/views/Profiling.vue'),

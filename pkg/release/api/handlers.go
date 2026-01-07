@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/voilet/quic-flow/pkg/git"
 	"github.com/voilet/quic-flow/pkg/release/callback"
+	"github.com/voilet/quic-flow/pkg/release/credential"
 	"github.com/voilet/quic-flow/pkg/release/engine"
 	"github.com/voilet/quic-flow/pkg/release/executor"
 	"github.com/voilet/quic-flow/pkg/release/models"
@@ -25,23 +27,43 @@ type ReleaseAPI struct {
 	db            *gorm.DB
 	engine        *engine.Engine
 	callbackMgr   *callback.Manager
+	credentialMgr *credential.Manager
 }
 
 // NewReleaseAPI 创建发布系统 API
 func NewReleaseAPI(db *gorm.DB) *ReleaseAPI {
+	// 从环境变量获取密钥
+	secretKey := os.Getenv("QUIC_FLOW_SECRET_KEY")
+	if secretKey == "" {
+		// 使用默认密钥（仅用于开发环境）
+		secretKey = "default-secret-key-change-in-production"
+	}
+
+	credMgr, _ := credential.NewManager(db, secretKey)
+
 	return &ReleaseAPI{
-		db:          db,
-		engine:      engine.NewEngine(db),
-		callbackMgr: callback.NewManager(db),
+		db:            db,
+		engine:        engine.NewEngine(db),
+		callbackMgr:   callback.NewManager(db),
+		credentialMgr: credMgr,
 	}
 }
 
 // NewReleaseAPIWithRemote 创建支持远程执行的发布系统 API
 func NewReleaseAPIWithRemote(db *gorm.DB, cmdSender executor.CommandSender) *ReleaseAPI {
+	// 从环境变量获取密钥
+	secretKey := os.Getenv("QUIC_FLOW_SECRET_KEY")
+	if secretKey == "" {
+		secretKey = "default-secret-key-change-in-production"
+	}
+
+	credMgr, _ := credential.NewManager(db, secretKey)
+
 	return &ReleaseAPI{
-		db:          db,
-		engine:      engine.NewEngineWithRemote(db, cmdSender),
-		callbackMgr: callback.NewManager(db),
+		db:            db,
+		engine:        engine.NewEngineWithRemote(db, cmdSender),
+		callbackMgr:   callback.NewManager(db),
+		credentialMgr: credMgr,
 	}
 }
 
@@ -205,6 +227,44 @@ func (api *ReleaseAPI) RegisterRoutes(r *gin.RouterGroup) {
 		release.PUT("/templates/:id", api.UpdateMessageTemplate)
 		release.DELETE("/templates/:id", api.DeleteMessageTemplate)
 		release.POST("/templates/:id/copy", api.CopyMessageTemplate)
+
+		// 凭证管理
+		release.GET("/credentials", api.ListCredentials)
+		release.GET("/credentials/:id", api.GetCredential)
+		release.POST("/credentials", api.CreateCredential)
+		release.PUT("/credentials/:id", api.UpdateCredential)
+		release.DELETE("/credentials/:id", api.DeleteCredential)
+		release.GET("/projects/:id/credentials", api.GetProjectCredentials)
+		release.POST("/projects/:id/credentials", api.AddProjectCredential)
+		release.DELETE("/projects/:id/credentials/:credential_id", api.RemoveProjectCredential)
+
+		// Webhook 管理
+		release.GET("/projects/:id/webhooks", api.ListWebhooks)
+		release.GET("/webhooks/:id", api.GetWebhook)
+		release.POST("/webhooks", api.CreateWebhook)
+		release.PUT("/webhooks/:id", api.UpdateWebhook)
+		release.DELETE("/webhooks/:id", api.DeleteWebhook)
+		release.POST("/webhooks/:id/regenerate-secret", api.RegenerateWebhookSecret)
+		release.POST("/webhooks/:id/test", api.TestWebhook)
+		release.GET("/webhooks/:id/triggers", api.ListTriggerHistory)
+
+		// 成员管理
+		release.GET("/projects/:id/members", api.ListMembers)
+		release.POST("/projects/:id/members", api.AddMember)
+		release.PUT("/projects/:id/members/:user_id", api.UpdateMember)
+		release.DELETE("/projects/:id/members/:user_id", api.RemoveMember)
+
+		// 用户管理
+		release.GET("/users/search", api.SearchUsers)
+		release.GET("/users", api.ListUsers)
+		release.GET("/users/:id", api.GetUser)
+		release.POST("/users", api.CreateUser)
+	}
+
+	// Webhook 接收（无需认证）
+	webhook := r.Group("/release/webhook")
+	{
+		webhook.POST("/incoming/:token", api.IncomingWebhook)
 	}
 }
 

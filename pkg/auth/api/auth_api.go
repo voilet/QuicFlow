@@ -194,7 +194,14 @@ func (a *AuthAPI) handleGetUserList(c *gin.Context) {
 	username := c.Query("username")
 	nickname := c.Query("nickname")
 
-	users, total, err := a.userService.GetUserList(page, pageSize, username, nickname)
+	var enable *uint
+	if enableStr := c.Query("enable"); enableStr != "" {
+		e, _ := strconv.Atoi(enableStr)
+		enableVal := uint(e)
+		enable = &enableVal
+	}
+
+	users, total, err := a.userService.GetUserList(page, pageSize, username, nickname, enable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 		return

@@ -14,50 +14,111 @@
         router
         class="el-menu-vertical"
       >
-        <el-menu-item index="/">
-          <el-icon><Monitor /></el-icon>
-          <span>客户端管理</span>
-        </el-menu-item>
-        <el-menu-item index="/command">
-          <el-icon><DocumentAdd /></el-icon>
-          <span>命令下发</span>
-        </el-menu-item>
-        <el-menu-item index="/history">
-          <el-icon><Document /></el-icon>
-          <span>命令历史</span>
-        </el-menu-item>
-        <el-menu-item index="/terminal">
-          <el-icon><Monitor /></el-icon>
-          <span>SSH 终端</span>
-        </el-menu-item>
-        <el-menu-item index="/audit">
-          <el-icon><List /></el-icon>
-          <span>命令审计</span>
-        </el-menu-item>
-        <el-menu-item index="/recordings">
-          <el-icon><VideoCamera /></el-icon>
-          <span>会话录像</span>
-        </el-menu-item>
-        <el-menu-item index="/release">
-          <el-icon><Upload /></el-icon>
-          <span>发布管理</span>
-        </el-menu-item>
-        <el-menu-item index="/callback-config">
-          <el-icon><Bell /></el-icon>
-          <span>回调配置</span>
-        </el-menu-item>
-        <el-menu-item index="/callback-history">
-          <el-icon><Clock /></el-icon>
-          <span>回调历史</span>
-        </el-menu-item>
-        <el-menu-item index="/profiling">
-          <el-icon><TrendCharts /></el-icon>
-          <span>性能分析</span>
-        </el-menu-item>
-        <el-menu-item index="/filetransfer">
-          <el-icon><Files /></el-icon>
-          <span>文件传输</span>
-        </el-menu-item>
+        <!-- 客户端管理 -->
+        <el-sub-menu index="client">
+          <template #title>
+            <el-icon><Monitor /></el-icon>
+            <span>客户端管理</span>
+          </template>
+          <el-menu-item index="/">
+            <el-icon><Platform /></el-icon>
+            <span>客户端列表</span>
+          </el-menu-item>
+          <el-menu-item index="/terminal">
+            <el-icon><Monitor /></el-icon>
+            <span>SSH 终端</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 命令管理 -->
+        <el-sub-menu index="command">
+          <template #title>
+            <el-icon><DocumentAdd /></el-icon>
+            <span>命令管理</span>
+          </template>
+          <el-menu-item index="/command">
+            <el-icon><DocumentAdd /></el-icon>
+            <span>命令下发</span>
+          </el-menu-item>
+          <el-menu-item index="/history">
+            <el-icon><Document /></el-icon>
+            <span>命令历史</span>
+          </el-menu-item>
+          <el-menu-item index="/audit">
+            <el-icon><List /></el-icon>
+            <span>命令审计</span>
+          </el-menu-item>
+          <el-menu-item index="/recordings">
+            <el-icon><VideoCamera /></el-icon>
+            <span>会话录像</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 发布管理 -->
+        <el-sub-menu index="release">
+          <template #title>
+            <el-icon><Upload /></el-icon>
+            <span>发布管理</span>
+          </template>
+          <el-menu-item index="/release">
+            <el-icon><Platform /></el-icon>
+            <span>项目列表</span>
+          </el-menu-item>
+          <el-menu-item index="/credentials">
+            <el-icon><Key /></el-icon>
+            <span>凭证中心</span>
+          </el-menu-item>
+          <el-menu-item index="/webhooks">
+            <el-icon><Connection /></el-icon>
+            <span>Webhook 配置</span>
+          </el-menu-item>
+          <el-menu-item index="/trigger-history">
+            <el-icon><Clock /></el-icon>
+            <span>触发历史</span>
+          </el-menu-item>
+          <el-menu-item index="/callback-config">
+            <el-icon><Bell /></el-icon>
+            <span>回调配置</span>
+          </el-menu-item>
+          <el-menu-item index="/callback-history">
+            <el-icon><Clock /></el-icon>
+            <span>回调历史</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 权限管理 -->
+        <el-sub-menu index="permission">
+          <template #title>
+            <el-icon><Lock /></el-icon>
+            <span>权限管理</span>
+          </template>
+          <el-menu-item index="/project-members">
+            <el-icon><User /></el-icon>
+            <span>项目成员</span>
+          </el-menu-item>
+          <el-menu-item index="/users">
+            <el-icon><User /></el-icon>
+            <span>用户管理</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 系统工具 -->
+        <el-sub-menu index="tools">
+          <template #title>
+            <el-icon><TrendCharts /></el-icon>
+            <span>系统工具</span>
+          </template>
+          <el-menu-item index="/filetransfer">
+            <el-icon><Files /></el-icon>
+            <span>文件传输</span>
+          </el-menu-item>
+          <el-menu-item index="/profiling">
+            <el-icon><TrendCharts /></el-icon>
+            <span>性能分析</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 系统设置 -->
         <el-menu-item index="/setup" class="setup-menu-item">
           <el-icon><Setting /></el-icon>
           <span>数据库设置</span>
@@ -131,7 +192,10 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, ArrowDown, Message, SwitchButton, TrendCharts, Files, Bell, Clock } from '@element-plus/icons-vue'
+import {
+  User, ArrowDown, Message, SwitchButton, TrendCharts, Files, Bell, Clock, Key, Connection,
+  Monitor, DocumentAdd, Document, List, VideoCamera, Upload, Setting, Platform, Lock
+} from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { request } from '@/api'
 
@@ -157,18 +221,23 @@ const dbInitialized = ref(null) // null=检查中, true=已初始化, false=未�
 
 const pageTitle = computed(() => {
   const titles = {
-    '/': '客户端管理',
+    '/': '客户端列表',
     '/command': '命令下发',
     '/history': '命令历史',
     '/terminal': 'SSH 终端',
     '/audit': '命令审计',
     '/recordings': '会话录像',
     '/release': '发布管理',
+    '/credentials': '凭证中心',
+    '/webhooks': 'Webhook 配置',
+    '/trigger-history': '触发历史',
+    '/project-members': '项目成员',
     '/callback-config': '回调配置',
     '/callback-history': '回调历史',
     '/profiling': '性能分析',
     '/filetransfer': '文件传输',
-    '/setup': '数据库设置'
+    '/setup': '数据库设置',
+    '/users': '用户管理'
   }
   return titles[route.path] || 'Pantheon Quic　管理系统'
 })

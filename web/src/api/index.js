@@ -885,6 +885,127 @@ export const api = {
     return request.get('/release/callbacks/template/defaults')
   },
 
+  // ===== 凭证管理 API =====
+
+  // 获取凭证列表
+  getCredentials(params = {}) {
+    return request.get('/release/credentials', { params })
+  },
+
+  // 获取凭证详情
+  getCredential(id) {
+    return request.get(`/release/credentials/${id}`)
+  },
+
+  // 创建凭证
+  createCredential(data) {
+    return request.post('/release/credentials', data)
+  },
+
+  // 更新凭证
+  updateCredential(id, data) {
+    return request.put(`/release/credentials/${id}`, data)
+  },
+
+  // 删除凭证
+  deleteCredential(id) {
+    return request.delete(`/release/credentials/${id}`)
+  },
+
+  // 获取项目的可用凭证
+  getProjectCredentials(projectId) {
+    return request.get(`/release/projects/${projectId}/credentials`)
+  },
+
+  // 关联凭证到项目
+  addProjectCredential(projectId, data) {
+    return request.post(`/release/projects/${projectId}/credentials`, data)
+  },
+
+  // 取消项目凭证关联
+  removeProjectCredential(projectId, credentialId) {
+    return request.delete(`/release/projects/${projectId}/credentials/${credentialId}`)
+  },
+
+  // ===== Webhook 触发器 API =====
+
+  // 获取项目的 Webhook 列表
+  getWebhooks(projectId) {
+    return request.get(`/release/projects/${projectId}/webhooks`)
+  },
+
+  // 获取 Webhook 详情
+  getWebhook(id) {
+    return request.get(`/release/webhooks/${id}`)
+  },
+
+  // 创建 Webhook
+  createWebhook(projectId, data) {
+    return request.post(`/release/projects/${projectId}/webhooks`, data)
+  },
+
+  // 更新 Webhook
+  updateWebhook(id, data) {
+    return request.put(`/release/webhooks/${id}`, data)
+  },
+
+  // 删除 Webhook
+  deleteWebhook(id) {
+    return request.delete(`/release/webhooks/${id}`)
+  },
+
+  // 测试 Webhook
+  testWebhook(id) {
+    return request.post(`/release/webhooks/${id}/test`)
+  },
+
+  // 获取 Webhook 触发历史
+  getWebhookTriggers(webhookId, params = {}) {
+    return request.get(`/release/webhooks/${webhookId}/triggers`, { params })
+  },
+
+  // 获取触发详情
+  getTrigger(id) {
+    return request.get(`/release/triggers/${id}`)
+  },
+
+  // 重试触发
+  retryTrigger(id) {
+    return request.post(`/release/triggers/${id}/retry`)
+  },
+
+  // ===== 成员管理 API =====
+
+  // 获取项目成员列表
+  getProjectMembers(projectId) {
+    return request.get(`/release/projects/${projectId}/members`)
+  },
+
+  // 添加项目成员
+  addProjectMember(projectId, data) {
+    return request.post(`/release/projects/${projectId}/members`, data)
+  },
+
+  // 更新成员角色
+  updateProjectMember(projectId, userId, data) {
+    return request.put(`/release/projects/${projectId}/members/${userId}`, data)
+  },
+
+  // 移除项目成员
+  removeProjectMember(projectId, userId) {
+    return request.delete(`/release/projects/${projectId}/members/${userId}`)
+  },
+
+  // 搜索用户
+  searchUsers(keyword) {
+    return request.get('/release/users/search', { params: { q: keyword } })
+  },
+
+  // 获取当前用户信息
+  getCurrentUser() {
+    return request.get('/release/users/me')
+  },
+
   // ==================== 消息模板管理 API ====================
 
   // 获取模板列表

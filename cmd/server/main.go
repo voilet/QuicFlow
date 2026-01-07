@@ -454,8 +454,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	logger.Info("SSH over QUIC enabled")
 	logger.Info("Press Ctrl+C to stop")
 
-	// 定期打印统计信息
-	go printServerStatus(srv, msgRouter)
+	// 定期打印统计信息（已禁用）
+	// go printServerStatus(srv, msgRouter)
 
 	// 等待中断信号
 	sigChan := make(chan os.Signal, 1)

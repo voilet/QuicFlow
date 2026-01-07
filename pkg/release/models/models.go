@@ -1538,4 +1538,13 @@ var AllModels = []interface{}{
 	// 硬件信息模型（简化版，不包含 device_disks 和 device_nics）
 	&hardware.Device{},
 	&hardware.DeviceHardwareHistory{},
+	// 凭证管理模型
+	&Credential{},
+	&ProjectCredential{},
+	// Webhook 触发器模型
+	&WebhookConfig{},
+	&TriggerRecord{},
+	// 成员权限模型
+	&User{},
+	&ProjectMember{},
 }
