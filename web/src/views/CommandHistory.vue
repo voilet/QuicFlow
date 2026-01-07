@@ -4,20 +4,12 @@
     <el-card shadow="never" class="filter-card">
       <el-form :inline="true" :model="filters">
         <el-form-item label="客户端ID">
-          <el-select
+          <el-input
             v-model="filters.client_id"
-            placeholder="全部客户端"
+            placeholder="输入客户端ID"
             clearable
-            filterable
             style="width: 200px"
-          >
-            <el-option
-              v-for="client in clients"
-              :key="client.client_id"
-              :label="client.client_id"
-              :value="client.client_id"
-            />
-          </el-select>
+          />
         </el-form-item>
 
         <el-form-item label="命令状态">
@@ -275,7 +267,6 @@ dayjs.extend(duration)
 const route = useRoute()
 const router = useRouter()
 
-const clients = ref([])
 const commands = ref([])
 const loading = ref(false)
 const total = ref(0)
@@ -289,16 +280,6 @@ const filters = reactive({
   client_id: route.query.client_id || '',
   status: ''
 })
-
-// 加载客户端列表
-async function loadClients() {
-  try {
-    const res = await api.getClients()
-    clients.value = res.clients || []
-  } catch (error) {
-    console.error('加载客户端列表失败', error)
-  }
-}
 
 // 加载命令列表
 async function loadCommands() {
@@ -461,7 +442,6 @@ function getStatusText(status) {
 }
 
 onMounted(() => {
-  loadClients()
   loadCommands()
   // 自动刷新
   setInterval(loadCommands, 15000)
