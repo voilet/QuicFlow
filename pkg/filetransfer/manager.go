@@ -2,11 +2,13 @@ package filetransfer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -335,6 +337,14 @@ func (m *Manager) saveTaskToDB(task *TransferTask) error {
 
 	// 准备数据库记录
 	now := time.Now()
+
+	// 将 map[string]interface{} 转换为 datatypes.JSON
+	var metadataJSON datatypes.JSON
+	if task.Metadata != nil {
+		metadataBytes, _ := json.Marshal(task.Metadata)
+		metadataJSON = datatypes.JSON(metadataBytes)
+	}
+
 	ft := &FileTransfer{
 		TaskID:          taskID,
 		FileName:        task.FileName,
@@ -347,7 +357,7 @@ func (m *Manager) saveTaskToDB(task *TransferTask) error {
 		BytesTransferred: task.Transferred,
 		UserID:          userID,
 		ClientIP:        task.ClientIP,
-		Metadata:        task.Metadata,
+		Metadata:        metadataJSON,
 		StartedAt:       now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -404,6 +414,17 @@ func (m *Manager) loadTaskFromDB(taskID string) (*TransferTask, error) {
 		return nil, fmt.Errorf("failed to load task: %w", err)
 	}
 
+	// 解析 Metadata 从 datatypes.JSON 到 map[string]interface{}
+	var metadata map[string]interface{}
+	if len(ft.Metadata) > 0 {
+		if err := json.Unmarshal(ft.Metadata, &metadata); err != nil {
+			// 如果解析失败，使用空 map
+			metadata = make(map[string]interface{})
+		}
+	} else {
+		metadata = make(map[string]interface{})
+	}
+
 	task := &TransferTask{
 		ID:          ft.TaskID.String(),
 		Type:        TransferType(ft.TransferType),
@@ -415,7 +436,7 @@ func (m *Manager) loadTaskFromDB(taskID string) (*TransferTask, error) {
 		Checksum:    ft.FileHash,
 		UserID:      ft.UserID.String(),
 		ClientIP:    ft.ClientIP,
-		Metadata:    ft.Metadata,
+		Metadata:    metadata,
 		Progress:    float64(ft.Progress),
 	}
 
@@ -445,6 +466,16 @@ func (m *Manager) restorePendingTasks() error {
 	}
 
 	for _, ft := range fts {
+		// 解析 Metadata
+		var metadata map[string]interface{}
+		if len(ft.Metadata) > 0 {
+			if err := json.Unmarshal(ft.Metadata, &metadata); err != nil {
+				metadata = make(map[string]interface{})
+			}
+		} else {
+			metadata = make(map[string]interface{})
+		}
+
 		task := &TransferTask{
 			ID:          ft.TaskID.String(),
 			Type:        TransferType(ft.TransferType),
@@ -456,7 +487,7 @@ func (m *Manager) restorePendingTasks() error {
 			Checksum:    ft.FileHash,
 			UserID:      ft.UserID.String(),
 			ClientIP:    ft.ClientIP,
-			Metadata:    ft.Metadata,
+			Metadata:    metadata,
 			cancelChan:  make(chan struct{}),
 		}
 

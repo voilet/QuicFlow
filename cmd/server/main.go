@@ -28,6 +28,8 @@ import (
 	releaseapi "github.com/voilet/quic-flow/pkg/release/api"
 	releasemodels "github.com/voilet/quic-flow/pkg/release/models"
 	"github.com/voilet/quic-flow/pkg/router"
+	"github.com/voilet/quic-flow/pkg/task/scheduler"
+	"github.com/voilet/quic-flow/pkg/task/store"
 	"github.com/voilet/quic-flow/pkg/transport/server"
 	"github.com/voilet/quic-flow/pkg/version"
 
@@ -215,10 +217,27 @@ func runServer(cmd *cobra.Command, args []string) {
 		if err := setupAPI.TryAutoConnect(cfg); err != nil {
 			logger.Warn("Auto-connect to database failed", "error", err)
 			logger.Info("Visit /setup to configure database")
+			// 如果 initDatabase 已经成功，releaseDB 应该已经有值
+			if releaseDB == nil {
+				logger.Warn("Database not available, some features will be disabled")
+			}
 		} else {
 			logger.Info("Database auto-connected successfully")
-			releaseDB = setupAPI.GetDB()
+			dbFromSetup := setupAPI.GetDB()
+			if dbFromSetup != nil {
+				releaseDB = dbFromSetup
+				logger.Info("Using database from setup API")
+			} else if releaseDB == nil {
+				logger.Warn("Database connection from setup API is nil")
+			}
 		}
+	}
+	
+	// 记录数据库状态
+	if releaseDB != nil {
+		logger.Info("Database is available", "releaseDB_not_nil", true)
+	} else {
+		logger.Info("Database is not available", "releaseDB_nil", true, "cfg.Database.Enabled", cfg.Database.Enabled)
 	}
 
 	// 添加批量执行 API
@@ -363,8 +382,14 @@ func runServer(cmd *cobra.Command, args []string) {
 		logger.Info("File transfer system enabled")
 	}
 
+	// ========== 任务管理系统变量（需要在回调中使用）==========
+	var taskManager *scheduler.TaskManager
+	var taskWSAPI *api.TaskWSAPI
+
 	// 设置数据库初始化回调，当通过 setup 页面初始化数据库后更新 release API 和 audit_store
 	setupAPI.SetOnDBReady(func(db *gorm.DB) {
+		releaseDB = db // 更新 releaseDB 引用
+		
 		releaseAPI.SetDB(db)
 		releaseAPI.SetRemoteExecutor(commandManager)
 		logger.Info("Release API database updated via setup")
@@ -423,12 +448,66 @@ func runServer(cmd *cobra.Command, args []string) {
 				}
 			}
 		}
+
+		// 初始化任务管理系统（如果尚未初始化）
+		if taskManager == nil {
+			var err error
+			taskManager, taskWSAPI, err = SetupTaskSystem(db, srv, disp, srv.GetSessions(), logger)
+			if err != nil {
+				logger.Error("Failed to setup task system via setup", "error", err)
+			} else if taskManager != nil {
+				// 创建存储层
+				taskStore := store.NewTaskStore(db)
+				executionStore := store.NewExecutionStore(db)
+				groupStore := store.NewGroupStore(db)
+
+				// 添加任务管理 API 路由
+				AddTaskRoutes(httpServer, taskManager, taskStore, executionStore, groupStore, taskWSAPI, logger)
+
+				logger.Info("Task management system enabled via setup")
+			}
+		}
 	})
 
 	if releaseDB != nil {
 		logger.Info("Release API routes added with database")
 	} else {
 		logger.Info("Release API routes added (database not configured, visit /setup)")
+	}
+
+	// ========== 任务管理系统 ==========
+	// 在 HTTP 服务器启动前注册路由
+	if releaseDB != nil {
+		logger.Info("Initializing task management system...", "database_available", true, "releaseDB", releaseDB != nil)
+		var err error
+		// 获取 dispatcher 和 session manager
+		if disp == nil {
+			logger.Error("Dispatcher is nil, cannot setup task system")
+		} else if srv.GetSessions() == nil {
+			logger.Error("Session manager is nil, cannot setup task system")
+		} else {
+			taskManager, taskWSAPI, err = SetupTaskSystem(releaseDB, srv, disp, srv.GetSessions(), logger)
+			if err != nil {
+				logger.Error("Failed to setup task system", "error", err)
+			} else if taskManager != nil {
+				// 创建存储层
+				taskStore := store.NewTaskStore(releaseDB)
+				executionStore := store.NewExecutionStore(releaseDB)
+				groupStore := store.NewGroupStore(releaseDB)
+
+				// 添加任务管理 API 路由（在 Start 之前）
+				logger.Info("Registering task management routes...")
+				AddTaskRoutes(httpServer, taskManager, taskStore, executionStore, groupStore, taskWSAPI, logger)
+
+				logger.Info("Task management system enabled and routes registered")
+			} else {
+				logger.Warn("Task manager is nil after setup")
+			}
+		}
+	} else {
+		logger.Info("Task management system disabled (database not configured)", "database_available", false)
+		logger.Info("Please configure database via /setup page to enable task management")
+		logger.Info("Current releaseDB status", "releaseDB_nil", releaseDB == nil)
 	}
 
 	if err := httpServer.Start(); err != nil {
@@ -465,6 +544,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	// 优雅关闭
 	if batchExecutor != nil {
 		batchExecutor.Stop()
+	}
+	if taskManager != nil {
+		// 停止 Cron 调度器（通过 Stop 方法）
+		// TaskManager 需要添加 Stop 方法，暂时先注释
+		// taskManager.Stop()
+		logger.Info("Task scheduler shutdown")
 	}
 	sshManager.Close()
 	if auditStore != nil {

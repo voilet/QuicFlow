@@ -564,8 +564,33 @@ function retryUpload(id: string) {
 }
 
 // 下载文件
-function downloadFile(file: UploadFile) {
-  ElMessage.info('下载功能待实现')
+async function downloadFile(file: UploadFile) {
+  try {
+    if (!file.taskId) {
+      ElMessage.error('文件任务ID不存在，无法下载')
+      return
+    }
+
+    // 直接通过任务ID下载文件
+    const blob = await fileTransferApi.downloadFile(file.taskId)
+
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    document.body.appendChild(a)
+    a.click()
+
+    // 清理
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+
+    ElMessage.success(`${file.name} 下载成功`)
+  } catch (error: any) {
+    console.error('Download error:', error)
+    ElMessage.error(`${file.name} 下载失败: ${error.message}`)
+  }
 }
 
 // 清除已完成

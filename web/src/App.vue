@@ -102,6 +102,26 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <!-- 定时任务 -->
+        <el-sub-menu index="task">
+          <template #title>
+            <el-icon><Timer /></el-icon>
+            <span>定时任务</span>
+          </template>
+          <el-menu-item index="/task">
+            <el-icon><List /></el-icon>
+            <span>任务管理</span>
+          </el-menu-item>
+          <el-menu-item index="/task/execution">
+            <el-icon><Document /></el-icon>
+            <span>执行记录</span>
+          </el-menu-item>
+          <el-menu-item index="/task/group">
+            <el-icon><User /></el-icon>
+            <span>分组管理</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <!-- 系统工具 -->
         <el-sub-menu index="tools">
           <template #title>
@@ -194,7 +214,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   User, ArrowDown, Message, SwitchButton, TrendCharts, Files, Bell, Clock, Key, Connection,
-  Monitor, DocumentAdd, Document, List, VideoCamera, Upload, Setting, Platform, Lock
+  Monitor, DocumentAdd, Document, List, VideoCamera, Upload, Setting, Platform, Lock, Timer
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { request } from '@/api'
@@ -236,6 +256,9 @@ const pageTitle = computed(() => {
     '/callback-history': '回调历史',
     '/profiling': '性能分析',
     '/filetransfer': '文件传输',
+    '/task': '任务管理',
+    '/task/execution': '执行记录',
+    '/task/group': '分组管理',
     '/setup': '数据库设置',
     '/users': '用户管理'
   }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -24,7 +25,7 @@ type FileTransfer struct {
 	UserID          uuid.UUID      `gorm:"type:uuid;not null;index;comment:用户UUID" json:"user_id"`
 	ClientIP        string         `gorm:"type:inet;comment:客户端IP" json:"client_ip,omitempty"`
 	ErrorMessage    string         `gorm:"type:text;comment:错误信息" json:"error_message,omitempty"`
-	Metadata        map[string]interface{} `gorm:"type:jsonb;comment:元数据" json:"metadata,omitempty"`
+	Metadata        datatypes.JSON `gorm:"type:jsonb;comment:元数据" json:"metadata,omitempty"`
 	StartedAt       time.Time      `gorm:"not null;comment:开始时间" json:"started_at"`
 	CompletedAt     *time.Time     `gorm:"comment:完成时间" json:"completed_at,omitempty"`
 	CreatedAt       time.Time      `gorm:"index" json:"created_at"`

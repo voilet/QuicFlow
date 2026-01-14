@@ -226,9 +226,25 @@ async function cancelTransfer(transfer: TransferItem) {
 // 下载文件
 async function downloadFile(transfer: TransferItem) {
   try {
-    ElMessage.info('下载功能开发中')
+    // 直接通过任务ID下载文件
+    const blob = await fileTransferApi.downloadFile(transfer.task_id)
+
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = transfer.file_name
+    document.body.appendChild(a)
+    a.click()
+
+    // 清理
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+
+    ElMessage.success(`${transfer.file_name} 下载成功`)
   } catch (error: any) {
-    ElMessage.error('下载失败')
+    console.error('Download error:', error)
+    ElMessage.error(`${transfer.file_name} 下载失败: ${error.message}`)
   }
 }
 

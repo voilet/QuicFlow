@@ -513,6 +513,11 @@ func (s *Server) GetDispatcher() *dispatcher.Dispatcher {
 	return s.dispatcher
 }
 
+// GetSessions 获取会话管理器
+func (s *Server) GetSessions() *session.SessionManager {
+	return s.sessions
+}
+
 // sendResponse 发送响应消息到客户端
 func (s *Server) sendResponse(clientID string, stream *quic.Stream, msg *protocol.DataMessage) {
 	if msg == nil {

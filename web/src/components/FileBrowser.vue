@@ -182,9 +182,30 @@ function handleRowClick(row: FileItem) {
 // 下载文件
 async function downloadFile(file: FileItem) {
   try {
-    ElMessage.info('下载功能开发中')
+    // 通过文件路径请求下载
+    const downloadResp = await fileTransferApi.requestDownload({
+      file_path: file.file_path || file.id
+    })
+
+    // 下载文件
+    const blob = await fileTransferApi.downloadFile(downloadResp.task_id)
+
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    document.body.appendChild(a)
+    a.click()
+
+    // 清理
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+
+    ElMessage.success(`${file.name} 下载成功`)
   } catch (error: any) {
-    ElMessage.error('下载失败')
+    console.error('Download error:', error)
+    ElMessage.error(`${file.name} 下载失败: ${error.message}`)
   }
 }
 

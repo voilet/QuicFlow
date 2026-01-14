@@ -109,6 +109,24 @@ const routes = [
     name: 'FileTransfer',
     component: () => import('@/views/FileTransfer.vue'),
     meta: { title: '文件传输' }
+  },
+  {
+    path: '/task',
+    name: 'TaskList',
+    component: () => import('@/views/task/List.vue'),
+    meta: { title: '任务管理' }
+  },
+  {
+    path: '/task/execution',
+    name: 'TaskExecution',
+    component: () => import('@/views/task/Execution.vue'),
+    meta: { title: '执行记录' }
+  },
+  {
+    path: '/task/group',
+    name: 'TaskGroup',
+    component: () => import('@/views/task/Group.vue'),
+    meta: { title: '分组管理' }
   }
 ]
 
