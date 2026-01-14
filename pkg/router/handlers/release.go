@@ -24,6 +24,21 @@ const (
 	releaseDefaultInterpreter = "/bin/bash"
 )
 
+// 安全环境变量白名单
+var safeEnvVars = map[string]bool{
+	"PATH":     true,
+	"HOME":     true,
+	"USER":     true,
+	"SHELL":    true,
+	"LANG":     true,
+	"LC_ALL":   true,
+	"TERM":     true,
+	"TMPDIR":   true,
+	"TZ":       true,
+	"PWD":      true,
+	"HOSTNAME": true,
+}
+
 // ReleaseExecute 执行发布任务
 // 命令类型: release.execute
 // 用法: r.Register(command.CmdReleaseExecute, handlers.ReleaseExecute)
@@ -78,7 +93,7 @@ func ReleaseExecute(ctx context.Context, payload json.RawMessage) (json.RawMessa
 
 	// 确定临时目录：使用工作目录下的 tmp 子目录
 	tmpDir := filepath.Join(workDir, "tmp")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		// 如果创建失败，使用系统临时目录
 		tmpDir = ""
 	}
@@ -116,8 +131,8 @@ func ReleaseExecute(ctx context.Context, payload json.RawMessage) (json.RawMessa
 	}
 	tmpFile.Close()
 
-	// 设置执行权限
-	if err := os.Chmod(tmpFile.Name(), 0755); err != nil {
+	// 设置执行权限（更严格的 0700）
+	if err := os.Chmod(tmpFile.Name(), 0700); err != nil {
 		return json.Marshal(command.ReleaseExecuteResult{
 			Success:    false,
 			ReleaseID:  params.ReleaseID,
@@ -164,8 +179,8 @@ func ReleaseExecute(ctx context.Context, payload json.RawMessage) (json.RawMessa
 	}
 	cmd.Dir = workDir
 
-	// 设置环境变量
-	cmd.Env = os.Environ()
+	// 设置环境变量（只保留白名单中的安全变量，避免敏感信息泄露）
+	cmd.Env = filterSafeEnvVars(os.Environ())
 	if params.Environment != nil {
 		for k, v := range params.Environment {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -291,4 +306,20 @@ func (w *limitedWriter) Write(p []byte) (n int, err error) {
 	}
 	w.written += len(p)
 	return len(p), nil
+}
+
+// filterSafeEnvVars 过滤环境变量，只保留安全的白名单变量
+func filterSafeEnvVars(envs []string) []string {
+	var filtered []string
+	for _, env := range envs {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		if safeEnvVars[key] {
+			filtered = append(filtered, env)
+		}
+	}
+	return filtered
 }

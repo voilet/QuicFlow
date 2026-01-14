@@ -2,6 +2,8 @@ package callback
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -15,6 +17,7 @@ import (
 // RetryTask 重试任务
 type RetryTask struct {
 	ID            string                 `json:"id"`
+	TaskID        string                 `json:"task_id"`         // 关联的部署任务ID
 	CallbackID    string                 `json:"callback_id"`
 	Channel       models.CallbackChannel `json:"channel"`
 	Payload       models.CallbackPayload `json:"payload"`
@@ -30,6 +33,8 @@ type RetryConfig struct {
 	InitialBackoff time.Duration `json:"initial_backoff"` // 初始退避时间
 	MaxBackoff     time.Duration `json:"max_backoff"`     // 最大退避时间
 	BackoffFactor  float64       `json:"backoff_factor"`  // 退避因子
+	WorkerCount    int           `json:"worker_count"`    // 工作线程数
+	QueueSize      int           `json:"queue_size"`      // 队列大小
 }
 
 // DefaultRetryConfig 默认重试配置
@@ -38,6 +43,8 @@ var DefaultRetryConfig = RetryConfig{
 	InitialBackoff: 5 * time.Second,
 	MaxBackoff:     10 * time.Minute,
 	BackoffFactor:  2.0,
+	WorkerCount:    3,
+	QueueSize:      1000,
 }
 
 // RetryQueue 回调重试队列
@@ -59,15 +66,25 @@ type RetryQueue struct {
 func NewRetryQueue(db *gorm.DB, config RetryConfig) *RetryQueue {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// 使用配置中的值，如果未设置则使用默认值
+	workerCount := config.WorkerCount
+	if workerCount <= 0 {
+		workerCount = DefaultRetryConfig.WorkerCount
+	}
+	queueSize := config.QueueSize
+	if queueSize <= 0 {
+		queueSize = DefaultRetryConfig.QueueSize
+	}
+
 	rq := &RetryQueue{
 		db:           db,
-		queue:        make(chan *RetryTask, 1000),
+		queue:        make(chan *RetryTask, queueSize),
 		config:       config,
 		ctx:          ctx,
 		cancel:       cancel,
 		pendingTasks: make(map[string]*RetryTask),
 		taskHistory:  make(map[string]int),
-		workerCount:  3, // 默认 3 个工作线程
+		workerCount:  workerCount,
 	}
 
 	return rq
@@ -99,8 +116,9 @@ func (rq *RetryQueue) Enqueue(task *RetryTask) error {
 		return fmt.Errorf("task cannot be nil")
 	}
 
-	// 检查任务是否已在队列中
-	taskKey := rq.getTaskKey(task.CallbackID, string(task.Channel.Type), string(task.Payload.EventType))
+	// 使用 TaskID + CallbackID + Channel + EventType 作为唯一标识
+	// 这样可以区分同一配置下不同任务的回调
+	taskKey := rq.getTaskKey(task.TaskID, task.CallbackID, string(task.Channel.Type), string(task.Payload.EventType))
 	rq.historyMu.RLock()
 	attempts := rq.taskHistory[taskKey]
 	rq.historyMu.RUnlock()
@@ -114,7 +132,7 @@ func (rq *RetryQueue) Enqueue(task *RetryTask) error {
 		task.NextRetryTime = time.Now().Add(rq.calculateBackoff(task.AttemptCount))
 	}
 
-	task.ID = generateRetryTaskID()
+	task.ID = generateUUID()
 	task.CreatedAt = time.Now()
 
 	// 更新任务历史记录
@@ -204,9 +222,11 @@ func (rq *RetryQueue) processTask(task *RetryTask, workerID int) {
 	callbackManager := NewManager(rq.db)
 	err := callbackManager.SendCallback(task.Channel, task.Payload)
 
+	// 使用包含 TaskID 的 key
+	taskKey := rq.getTaskKey(task.TaskID, task.CallbackID, string(task.Channel.Type), string(task.Payload.EventType))
+
 	if err == nil {
 		// 回调成功，从历史记录中清除
-		taskKey := rq.getTaskKey(task.CallbackID, string(task.Channel.Type), string(task.Payload.EventType))
 		rq.historyMu.Lock()
 		delete(rq.taskHistory, taskKey)
 		rq.historyMu.Unlock()
@@ -221,7 +241,6 @@ func (rq *RetryQueue) processTask(task *RetryTask, workerID int) {
 
 	if task.AttemptCount >= task.MaxAttempts {
 		// 达到最大重试次数，放弃重试
-		taskKey := rq.getTaskKey(task.CallbackID, string(task.Channel.Type), string(task.Payload.EventType))
 		rq.historyMu.Lock()
 		delete(rq.taskHistory, taskKey)
 		rq.historyMu.Unlock()
@@ -253,15 +272,16 @@ func (rq *RetryQueue) calculateBackoff(attempt int) time.Duration {
 	return time.Duration(backoff)
 }
 
-// getTaskKey 生成任务唯一标识
-func (rq *RetryQueue) getTaskKey(callbackID, channelType, eventType string) string {
-	return fmt.Sprintf("%s:%s:%s", callbackID, channelType, eventType)
+// getTaskKey 生成任务唯一标识（包含 TaskID 以区分不同任务实例）
+func (rq *RetryQueue) getTaskKey(taskID, callbackID, channelType, eventType string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", taskID, callbackID, channelType, eventType)
 }
 
 // recordRetryHistory 记录重试历史
 func (rq *RetryQueue) recordRetryHistory(task *RetryTask, workerID int) {
 	history := &models.CallbackHistory{
 		ID:         generateHistoryID(),
+		TaskID:     task.TaskID,
 		ConfigID:   task.CallbackID,
 		EventType:  task.Payload.EventType,
 		Channel:    task.Channel.Type,
@@ -326,12 +346,17 @@ func (rq *RetryQueue) GetQueueStatus() map[string]interface{} {
 	}
 }
 
-// generateRetryTaskID 生成重试任务 ID
-func generateRetryTaskID() string {
-	return fmt.Sprintf("retry-%d", time.Now().UnixNano())
+// generateUUID 生成 UUID
+func generateUUID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		// 如果随机数生成失败，使用时间戳作为后备
+		return fmt.Sprintf("id-%d-%d", time.Now().UnixNano(), time.Now().UnixMicro())
+	}
+	return hex.EncodeToString(bytes)
 }
 
 // generateHistoryID 生成历史记录 ID
 func generateHistoryID() string {
-	return fmt.Sprintf("history-%d", time.Now().UnixNano())
+	return "hist-" + generateUUID()
 }

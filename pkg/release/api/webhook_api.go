@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -185,8 +186,9 @@ func (s *ReleaseAPI) CreateWebhook(c *gin.Context) {
 		"data": gin.H{
 			"id":     wh.ID,
 			"url":    wh.URL,
-			"secret": secret, // 返回密钥供用户配置
+			"secret": secret, // 仅在创建时返回，请妥善保存
 		},
+		"warning": "请立即保存密钥，此后将不再显示。如果丢失，请使用「重新生成密钥」功能。",
 	})
 }
 
@@ -332,6 +334,7 @@ func (s *ReleaseAPI) RegenerateWebhookSecret(c *gin.Context) {
 			"url":    webhookURL,
 			"secret": secret,
 		},
+		"warning": "请立即保存新密钥，此后将不再显示。旧密钥已失效，请更新您的 Git 平台配置。",
 	})
 }
 
@@ -341,6 +344,26 @@ func (s *ReleaseAPI) RegenerateWebhookSecret(c *gin.Context) {
 // POST /api/release/webhook/incoming/:token
 func (s *ReleaseAPI) IncomingWebhook(c *gin.Context) {
 	token := c.Param("token")
+
+	// 速率限制检查（使用token作为key）
+	rateLimiter := webhook.GetGlobalRateLimiter()
+	allowed, remaining, resetAt := rateLimiter.Allow(token)
+	if !allowed {
+		c.Header("X-RateLimit-Limit", "60")
+		c.Header("X-RateLimit-Remaining", "0")
+		c.Header("X-RateLimit-Reset", resetAt.Format(time.RFC3339))
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"success":  false,
+			"message":  "Rate limit exceeded",
+			"reset_at": resetAt.Format(time.RFC3339),
+		})
+		return
+	}
+
+	// 设置速率限制响应头
+	c.Header("X-RateLimit-Limit", "60")
+	c.Header("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+	c.Header("X-RateLimit-Reset", resetAt.Format(time.RFC3339))
 
 	// 读取原始 body
 	body, err := io.ReadAll(c.Request.Body)

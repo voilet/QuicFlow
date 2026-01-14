@@ -90,6 +90,7 @@
     <!-- 终端标签页 -->
     <div class="terminal-tabs-container">
       <el-tabs
+        v-if="terminalTabs.length > 0"
         v-model="activeTabId"
         type="card"
         closable
@@ -112,89 +113,14 @@
             </span>
           </template>
 
-          <!-- 常规输入/输出终端 -->
-          <div class="simple-terminal">
-            <!-- 输出区域 -->
-            <div class="terminal-output" ref="outputRefs">
-              <div v-if="tab.history.length === 0" class="terminal-welcome">
-                <div class="welcome-icon">🔗</div>
-                <div class="welcome-title">SSH 终端已连接</div>
-                <div class="welcome-desc">
-                  客户端: <span class="highlight">{{ tab.clientId }}</span><br>
-                  状态: <span :class="tab.connected ? 'status-online' : 'status-offline'">
-                    {{ tab.connected ? '已连接' : '未连接' }}
-                  </span>
-                </div>
-                <div class="welcome-hint">
-                  💡 在下方输入框输入命令，按 Enter 执行
-                </div>
-              </div>
-
-              <div
-                v-for="(entry, idx) in tab.history"
-                :key="idx"
-                :class="['terminal-entry', `entry-${entry.type}`]"
-              >
-                <!-- 命令输入 -->
-                <div v-if="entry.type === 'input'" class="entry-input">
-                  <span class="prompt">$</span>
-                  <span class="command">{{ escapeHtml(entry.content) }}</span>
-                </div>
-
-                <!-- 命令输出 -->
-                <div v-else-if="entry.type === 'output'" class="entry-output">
-                  <pre class="output-text">{{ escapeHtml(entry.content) }}</pre>
-                </div>
-
-                <!-- 系统消息 -->
-                <div v-else-if="entry.type === 'system'" class="entry-system">
-                  {{ entry.content }}
-                </div>
-
-                <!-- 错误消息 -->
-                <div v-else-if="entry.type === 'error'" class="entry-error">
-                  ❌ {{ escapeHtml(entry.content) }}
-                </div>
-              </div>
-            </div>
-
-            <!-- 输入区域 -->
-            <div class="terminal-input-area">
-              <div class="input-prompt">$</div>
-              <el-input
-                v-model="tab.inputValue"
-                :placeholder="tab.connected ? '输入命令...' : '未连接'"
-                :disabled="!tab.connected"
-                @keydown="handleInputKeydown($event, tab.id)"
-                class="terminal-input"
-                size="large"
-                clearable
-              />
-              <el-button
-                type="primary"
-                @click="sendCommand(tab.id)"
-                :disabled="!tab.connected || !tab.inputValue"
-                :loading="tab.sending"
-                size="large"
-              >
-                执行
-              </el-button>
-              <el-button
-                @click="clearHistory(tab.id)"
-                :disabled="tab.history.length === 0"
-                size="large"
-              >
-                清空
-              </el-button>
-            </div>
-          </div>
+          <!-- xterm.js 终端容器 -->
+          <div class="xterm-container" :ref="el => setTerminalRef(tab.id, el)"></div>
         </el-tab-pane>
       </el-tabs>
 
-      <!-- 终端容器 -->
-      <div class="terminals-wrapper">
-        <!-- 空状态 -->
-        <div v-if="terminalTabs.length === 0" class="empty-state">
+      <!-- 空状态 -->
+      <div v-if="terminalTabs.length === 0" class="terminals-wrapper">
+        <div class="empty-state">
           <div class="empty-content">
             <!-- 主视觉区域 -->
             <div class="empty-hero">
@@ -225,8 +151,8 @@
                   <el-icon><Document /></el-icon>
                 </div>
                 <div class="guide-header-content">
-                  <h3 class="guide-title">命令执行终端</h3>
-                  <p class="guide-subtitle">远程执行 Shell 命令并查看输出结果</p>
+                  <h3 class="guide-title">SSH 终端</h3>
+                  <p class="guide-subtitle">完整的交互式终端体验</p>
                 </div>
               </div>
 
@@ -234,19 +160,19 @@
                 <div class="guide-features">
                   <div class="feature-badge">
                     <el-icon><CircleCheck /></el-icon>
-                    <span>简单输入输出</span>
+                    <span>交互式命令</span>
                   </div>
                   <div class="feature-badge">
                     <el-icon><CircleCheck /></el-icon>
-                    <span>命令历史记录</span>
+                    <span>Tab 补全</span>
                   </div>
                   <div class="feature-badge">
                     <el-icon><CircleCheck /></el-icon>
-                    <span>多标签页支持</span>
+                    <span>Vim/Nano 编辑器</span>
                   </div>
                   <div class="feature-badge">
                     <el-icon><CircleCheck /></el-icon>
-                    <span>实时输出显示</span>
+                    <span>快捷键支持</span>
                   </div>
                 </div>
               </div>
@@ -262,6 +188,10 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh, Plus, FullScreen, Close, Connection, Document, CircleCheck, List } from '@element-plus/icons-vue'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 import api from '@/api'
 
 // 状态
@@ -277,22 +207,23 @@ const searchQuery = ref('')
 const isFullscreen = ref(false)
 const activeTabId = ref('')
 const terminalTabs = ref([])
-const outputRefs = ref({})
 
-// WebSocket 连接存储
+// 存储终端实例和 WebSocket
+const terminals = {}
+const fitAddons = {}
 const websockets = {}
+const terminalRefs = {}
 
 let tabCounter = 0
 
 // 是否还有更多数据可加载
 const hasMoreClients = computed(() => clients.value.length < clientTotal.value)
 
-// HTML 转义
-function escapeHtml(text) {
-  if (!text) return ''
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
+// 设置终端容器引用
+function setTerminalRef(tabId, el) {
+  if (el) {
+    terminalRefs[tabId] = el
+  }
 }
 
 // 获取客户端列表
@@ -427,22 +358,100 @@ async function openNewTerminal() {
     id: tabId,
     clientId: clientId,
     label: clientId,
-    connected: false,
-    sending: false,
-    inputValue: '',
-    history: []
+    connected: false
   })
 
   activeTabId.value = tabId
 
   await nextTick()
 
+  // 初始化 xterm.js 终端
+  initTerminal(tabId, clientId)
+}
+
+// 初始化 xterm.js 终端
+function initTerminal(tabId, clientId) {
+  const container = terminalRefs[tabId]
+  if (!container) {
+    console.error('[Terminal] 容器不存在:', tabId)
+    return
+  }
+
+  // 创建终端实例
+  const term = new Terminal({
+    cursorBlink: true,
+    cursorStyle: 'block',
+    fontSize: 13,
+    fontFamily: 'Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", Courier, monospace',
+    fontWeight: '400',
+    fontWeightBold: '700',
+    letterSpacing: 0,
+    lineHeight: 1.0,
+    theme: {
+      background: '#0a0e27',
+      foreground: '#d4d4d4',
+      cursor: '#ffffff',
+      cursorAccent: '#0a0e27',
+      selectionBackground: 'rgba(59, 130, 246, 0.4)',
+      black: '#000000',
+      red: '#ef4444',
+      green: '#10b981',
+      yellow: '#f59e0b',
+      blue: '#3b82f6',
+      magenta: '#a855f7',
+      cyan: '#06b6d4',
+      white: '#d4d4d4',
+      brightBlack: '#64748b',
+      brightRed: '#f87171',
+      brightGreen: '#34d399',
+      brightYellow: '#fbbf24',
+      brightBlue: '#60a5fa',
+      brightMagenta: '#c084fc',
+      brightCyan: '#22d3ee',
+      brightWhite: '#ffffff'
+    },
+    allowProposedApi: true
+  })
+
+  // 添加插件
+  const fitAddon = new FitAddon()
+  const webLinksAddon = new WebLinksAddon()
+
+  term.loadAddon(fitAddon)
+  term.loadAddon(webLinksAddon)
+
+  // 挂载终端
+  term.open(container)
+
+  // 适配容器大小
+  setTimeout(() => {
+    fitAddon.fit()
+  }, 0)
+
+  // 存储实例
+  terminals[tabId] = term
+  fitAddons[tabId] = fitAddon
+
+  // 显示连接信息和风险提示
+  term.writeln('\x1b[1;33m========================================\x1b[0m')
+  term.writeln('\x1b[1;33m  WARNING / 警告\x1b[0m')
+  term.writeln('\x1b[1;33m========================================\x1b[0m')
+  term.writeln('')
+  term.writeln('\x1b[33m本终端仅供授权用户使用。\x1b[0m')
+  term.writeln('\x1b[33m所有操作将被记录和监控。\x1b[0m')
+  term.writeln('\x1b[33m未经授权的访问将被追究法律责任。\x1b[0m')
+  term.writeln('')
+  term.writeln('\x1b[1;33m========================================\x1b[0m')
+  term.writeln('')
+  term.writeln('正在连接到 ' + clientId + '...')
+  term.writeln('')
+
   // 连接 WebSocket
-  connectWebSocket(tabId, clientId)
+  connectWebSocket(tabId, clientId, term)
 }
 
 // 连接 WebSocket
-function connectWebSocket(tabId, clientId) {
+function connectWebSocket(tabId, clientId, term) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const wsUrl = `${protocol}//${window.location.host}/api/terminal/ws/${clientId}`
 
@@ -452,59 +461,107 @@ function connectWebSocket(tabId, clientId) {
   const tab = terminalTabs.value.find(t => t.id === tabId)
 
   ws.onopen = () => {
-    addHistoryEntry(tabId, 'system', `已连接到 ${clientId}`)
+    term.writeln('\x1b[32m[OK] WebSocket 已连接\x1b[0m')
+
     if (tab) {
       tab.connected = true
-      tab.sessionId = Date.now().toString()
     }
+
+    // 获取终端尺寸
+    const fitAddon = fitAddons[tabId]
+    let cols = 80
+    let rows = 24
+    if (fitAddon) {
+      const dims = fitAddon.proposeDimensions()
+      if (dims) {
+        cols = dims.cols
+        rows = dims.rows
+      }
+    }
+
     // 发送初始化消息
     ws.send(JSON.stringify({
       type: 'init',
-      cols: 80,
-      rows: 24
+      cols: cols,
+      rows: rows
     }))
   }
 
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
+
       switch (msg.type) {
         case 'output':
-          addHistoryEntry(tabId, 'output', msg.data)
+          // 直接写入终端（xterm.js 会处理 ANSI 序列）
+          term.write(msg.data)
           break
         case 'connected':
+          term.writeln('\x1b[32m[OK] SSH 会话已建立\x1b[0m')
+          term.writeln('\x1b[90mSession ID: ' + msg.data + '\x1b[0m')
+          term.writeln('')
           if (tab) {
             tab.connected = true
             tab.sessionId = msg.data
           }
-          addHistoryEntry(tabId, 'system', 'SSH 会话已建立')
           break
         case 'disconnected':
-          addHistoryEntry(tabId, 'system', `连接已断开: ${msg.data}`)
+          term.writeln('')
+          term.writeln('\x1b[33m[WARN] 连接已断开: ' + msg.data + '\x1b[0m')
           if (tab) tab.connected = false
           break
         case 'error':
-          addHistoryEntry(tabId, 'error', msg.data)
+          term.writeln('')
+          term.writeln('\x1b[31m[ERROR] ' + msg.data + '\x1b[0m')
           if (tab) tab.connected = false
           break
+        case 'pong':
+          // 心跳响应，忽略
+          break
+        default:
+          console.warn('[Terminal] 未知消息类型:', msg.type)
       }
     } catch (e) {
-      console.error('解析消息失败:', e)
+      console.error('[Terminal] 解析消息失败:', e)
+      // 尝试直接写入原始数据
+      term.write(event.data)
     }
   }
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     if (tab && tab.connected) {
-      addHistoryEntry(tabId, 'system', 'WebSocket 连接已关闭')
+      term.writeln('')
+      term.writeln('\x1b[33m[WARN] WebSocket 连接已关闭 (Code: ' + event.code + ')\x1b[0m')
     }
     if (tab) tab.connected = false
   }
 
   ws.onerror = (error) => {
-    addHistoryEntry(tabId, 'error', '连接错误')
-    console.error('WebSocket error:', error)
+    term.writeln('')
+    term.writeln('\x1b[31m[ERROR] WebSocket 连接错误\x1b[0m')
     if (tab) tab.connected = false
   }
+
+  // 终端输入处理 - 实时发送每个字符
+  term.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'input',
+        data: data
+      }))
+    }
+  })
+
+  // 终端大小变化处理
+  term.onResize(({ cols, rows }) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'resize',
+        cols: cols,
+        rows: rows
+      }))
+    }
+  })
 
   // 心跳
   const pingInterval = setInterval(() => {
@@ -518,81 +575,9 @@ function connectWebSocket(tabId, clientId) {
   ws._pingInterval = pingInterval
 }
 
-// 添加历史记录
-function addHistoryEntry(tabId, type, content) {
-  const tab = terminalTabs.value.find(t => t.id === tabId)
-  if (!tab) return
-
-  tab.history.push({
-    type,
-    content,
-    timestamp: Date.now()
-  })
-
-  // 自动滚动到底部
-  nextTick(() => {
-    scrollToBottom(tabId)
-  })
-}
-
-// 滚动到底部
-function scrollToBottom(tabId) {
-  const container = outputRefs.value
-  if (!container) return
-  // 找到对应的输出容器
-  const tabElement = document.querySelector(`[data-tab-id="${tabId}"] .terminal-output`)
-  if (tabElement) {
-    tabElement.scrollTop = tabElement.scrollHeight
-  }
-}
-
-// 处理输入框按键
-function handleInputKeydown(event, tabId) {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    sendCommand(tabId)
-  }
-}
-
-// 发送命令
-function sendCommand(tabId) {
-  const tab = terminalTabs.value.find(t => t.id === tabId)
-  if (!tab || !tab.connected || !tab.inputValue) return
-
-  const command = tab.inputValue.trim()
-  if (!command) return
-
-  // 添加命令到历史
-  addHistoryEntry(tabId, 'input', command)
-
-  // 清空输入框
-  const inputValue = tab.inputValue
-  tab.inputValue = ''
-
-  // 发送到 WebSocket
-  const ws = websockets[tabId]
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    tab.sending = true
-    ws.send(JSON.stringify({
-      type: 'input',
-      data: command + '\n'
-    }))
-    tab.sending = false
-  } else {
-    addHistoryEntry(tabId, 'error', 'WebSocket 未连接')
-  }
-}
-
-// 清空历史
-function clearHistory(tabId) {
-  const tab = terminalTabs.value.find(t => t.id === tabId)
-  if (tab) {
-    tab.history = []
-  }
-}
-
 // 关闭终端
 function closeTerminal(tabId) {
+  // 关闭 WebSocket
   const ws = websockets[tabId]
   if (ws) {
     if (ws._pingInterval) clearInterval(ws._pingInterval)
@@ -600,11 +585,24 @@ function closeTerminal(tabId) {
     delete websockets[tabId]
   }
 
+  // 销毁终端实例
+  const term = terminals[tabId]
+  if (term) {
+    term.dispose()
+    delete terminals[tabId]
+  }
+
+  // 清理 fitAddon
+  delete fitAddons[tabId]
+  delete terminalRefs[tabId]
+
+  // 移除标签
   const index = terminalTabs.value.findIndex(t => t.id === tabId)
   if (index !== -1) {
     terminalTabs.value.splice(index, 1)
   }
 
+  // 切换到其他标签
   if (activeTabId.value === tabId) {
     if (terminalTabs.value.length > 0) {
       activeTabId.value = terminalTabs.value[Math.max(0, index - 1)].id
@@ -617,13 +615,43 @@ function closeTerminal(tabId) {
 // 标签切换处理
 function handleTabChange(tabId) {
   nextTick(() => {
-    scrollToBottom(tabId)
+    // 重新适配终端大小
+    const fitAddon = fitAddons[tabId]
+    if (fitAddon) {
+      fitAddon.fit()
+    }
+    // 聚焦终端
+    const term = terminals[tabId]
+    if (term) {
+      term.focus()
+    }
   })
 }
 
 // 全屏切换
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
+  // 延迟重新适配所有终端大小
+  nextTick(() => {
+    setTimeout(() => {
+      Object.keys(fitAddons).forEach(tabId => {
+        const fitAddon = fitAddons[tabId]
+        if (fitAddon) {
+          fitAddon.fit()
+        }
+      })
+    }, 100)
+  })
+}
+
+// 窗口大小变化处理
+function handleResize() {
+  Object.keys(fitAddons).forEach(tabId => {
+    const fitAddon = fitAddons[tabId]
+    if (fitAddon) {
+      fitAddon.fit()
+    }
+  })
 }
 
 // 键盘快捷键
@@ -653,12 +681,15 @@ function handleKeydown(e) {
 onMounted(() => {
   fetchClients()
   document.addEventListener('keydown', handleKeydown)
+  window.addEventListener('resize', handleResize)
 })
 
 // 组件卸载
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('resize', handleResize)
 
+  // 清理所有终端
   terminalTabs.value.forEach(tab => {
     closeTerminal(tab.id)
   })
@@ -805,13 +836,17 @@ watch(activeTabId, (newId) => {
 }
 
 .terminal-tabs {
-  flex-shrink: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 :deep(.terminal-tabs .el-tabs__header) {
   margin: 0;
   background: rgba(18, 18, 18, 0.8);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
 }
 
 :deep(.terminal-tabs .el-tabs__nav-wrap::after),
@@ -841,7 +876,13 @@ watch(activeTabId, (newId) => {
 }
 
 :deep(.terminal-tabs .el-tabs__content) {
-  display: none;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+:deep(.terminal-tabs .el-tab-pane) {
+  height: 100%;
 }
 
 .tab-label {
@@ -864,195 +905,64 @@ watch(activeTabId, (newId) => {
   color: #64748b;
 }
 
-/* 简单终端 */
-.simple-terminal {
-  display: flex;
-  flex-direction: column;
+/* xterm.js 容器 */
+.xterm-container {
+  width: 100%;
   height: 100%;
-  background: rgba(10, 14, 39, 0.5);
-  border-radius: 0 0 12px 12px;
+  padding: 8px;
+  box-sizing: border-box;
+  background: #0a0e27;
 }
 
-.terminal-output {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-  font-size: 13px;
-  line-height: 1.6;
+:deep(.xterm) {
+  height: 100%;
 }
 
-/* 滚动条样式 */
-.terminal-output::-webkit-scrollbar {
+:deep(.xterm .xterm-screen) {
+  font-family: Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", Courier, monospace !important;
+}
+
+:deep(.xterm-viewport) {
+  overflow-y: auto !important;
+}
+
+:deep(.xterm-viewport::-webkit-scrollbar) {
   width: 8px;
 }
 
-.terminal-output::-webkit-scrollbar-track {
+:deep(.xterm-viewport::-webkit-scrollbar-track) {
   background: rgba(0, 0, 0, 0.2);
   border-radius: 4px;
 }
 
-.terminal-output::-webkit-scrollbar-thumb {
+:deep(.xterm-viewport::-webkit-scrollbar-thumb) {
   background: rgba(59, 130, 246, 0.3);
   border-radius: 4px;
 }
 
-.terminal-output::-webkit-scrollbar-thumb:hover {
+:deep(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
   background: rgba(59, 130, 246, 0.5);
-}
-
-/* 欢迎界面 */
-.terminal-welcome {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  text-align: center;
-  color: #94a3b8;
-}
-
-.welcome-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.welcome-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #ffffff;
-  margin-bottom: 8px;
-}
-
-.welcome-desc {
-  font-size: 14px;
-  line-height: 1.8;
-}
-
-.welcome-desc .highlight {
-  color: #3b82f6;
-  font-weight: 500;
-}
-
-.welcome-desc .status-online {
-  color: #10b981;
-}
-
-.welcome-desc .status-offline {
-  color: #64748b;
-}
-
-.welcome-hint {
-  margin-top: 20px;
-  padding: 12px 20px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-/* 终端条目 */
-.terminal-entry {
-  margin-bottom: 8px;
-}
-
-.entry-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.entry-input .prompt {
-  color: #10b981;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.entry-input .command {
-  color: #ffffff;
-  word-break: break-all;
-}
-
-.entry-output {
-  margin-left: 20px;
-}
-
-.entry-output .output-text {
-  margin: 0;
-  color: #d4d4d4;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-}
-
-.entry-system {
-  color: #64748b;
-  font-style: italic;
-  padding: 4px 0;
-}
-
-.entry-error {
-  color: #ef4444;
-  padding: 4px 0;
-}
-
-/* 输入区域 */
-.terminal-input-area {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: rgba(30, 30, 30, 0.9);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  flex-shrink: 0;
-}
-
-.input-prompt {
-  color: #10b981;
-  font-weight: 600;
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.terminal-input {
-  flex: 1;
-}
-
-:deep(.terminal-input .el-input__wrapper) {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: none;
-}
-
-:deep(.terminal-input .el-input__inner) {
-  color: #ffffff;
-  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-}
-
-:deep(.terminal-input .el-input__inner::placeholder) {
-  color: #64748b;
 }
 
 /* 终端包装器 */
 .terminals-wrapper {
   flex: 1;
-  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
   background: rgba(0, 0, 0, 0.3);
 }
 
 /* 空状态 */
 .empty-state {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 48px 24px;
   overflow-y: auto;
+  width: 100%;
+  height: 100%;
 }
 
 .empty-content {

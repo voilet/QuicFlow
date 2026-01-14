@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -70,6 +71,15 @@ func (api *ReleaseAPI) CreateCallbackConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "At least one callback channel is required",
+		})
+		return
+	}
+
+	// 验证渠道URL安全性
+	if err := api.validateChannelURLs(config.Channels); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   err.Error(),
 		})
 		return
 	}
@@ -229,6 +239,15 @@ func (api *ReleaseAPI) UpdateCallbackConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "At least one callback channel is required",
+		})
+		return
+	}
+
+	// 验证渠道URL安全性
+	if err := api.validateChannelURLs(update.Channels); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   err.Error(),
 		})
 		return
 	}
@@ -535,6 +554,14 @@ func (api *ReleaseAPI) TestCallbackDirect(c *gin.Context) {
 			})
 			return
 		}
+		// 验证URL安全性
+		if result := callback.ValidateCallbackURL(req.ChannelConfig.Feishu.WebhookURL); !result.Valid {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "Invalid feishu webhook URL: " + result.Error,
+			})
+			return
+		}
 		notifier := callback.NewFeishuNotifier(req.ChannelConfig.Feishu)
 		err = notifier.Send(testPayload)
 	case models.CallbackTypeDingTalk:
@@ -542,6 +569,14 @@ func (api *ReleaseAPI) TestCallbackDirect(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"success": false,
 				"error":   "DingTalk webhook URL is required",
+			})
+			return
+		}
+		// 验证URL安全性
+		if result := callback.ValidateCallbackURL(req.ChannelConfig.DingTalk.WebhookURL); !result.Valid {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"error":   "Invalid dingtalk webhook URL: " + result.Error,
 			})
 			return
 		}
@@ -828,40 +863,50 @@ func (api *ReleaseAPI) GetCallbackStats(c *gin.Context) {
 		return
 	}
 
-	// 基础统计查询
-	var totalCount int64
-	var successCount int64
-	var failedCount int64
-	var retryingCount int64
-
-	query := api.db.Model(&models.CallbackHistory{})
+	// 构建基础查询条件
+	baseQuery := api.db.Model(&models.CallbackHistory{})
 
 	// 筛选条件
-	if projectID := c.Query("project_id"); projectID != "" {
-		// 通过任务关联项目ID
-		query = query.Joins("JOIN deploy_tasks ON callback_history.task_id = deploy_tasks.id").
+	projectID := c.Query("project_id")
+	startTime := c.Query("start_time")
+	endTime := c.Query("end_time")
+
+	if projectID != "" {
+		baseQuery = baseQuery.Joins("JOIN deploy_tasks ON callback_history.task_id = deploy_tasks.id").
 			Where("deploy_tasks.project_id = ?", projectID)
 	}
-
-	// 时间范围
-	if startTime := c.Query("start_time"); startTime != "" {
-		query = query.Where("callback_history.created_at >= ?", startTime)
+	if startTime != "" {
+		baseQuery = baseQuery.Where("callback_history.created_at >= ?", startTime)
 	}
-	if endTime := c.Query("end_time"); endTime != "" {
-		query = query.Where("callback_history.created_at <= ?", endTime)
+	if endTime != "" {
+		baseQuery = baseQuery.Where("callback_history.created_at <= ?", endTime)
 	}
 
-	// 统计总数
-	query.Count(&totalCount)
+	// 使用一次查询获取所有状态的统计（优化：避免多次查询）
+	type StatusCount struct {
+		Status string `json:"status"`
+		Count  int64  `json:"count"`
+	}
+	var statusCounts []StatusCount
+	baseQuery.Select("status, COUNT(*) as count").
+		Group("status").
+		Scan(&statusCounts)
 
-	// 统计成功数
-	api.db.Model(&models.CallbackHistory{}).Where("status = ?", models.CallbackStatusSuccess).Count(&successCount)
-
-	// 统计失败数
-	api.db.Model(&models.CallbackHistory{}).Where("status = ?", models.CallbackStatusFailed).Count(&failedCount)
-
-	// 统计重试中数
-	api.db.Model(&models.CallbackHistory{}).Where("status = ?", models.CallbackStatusRetrying).Count(&retryingCount)
+	// 解析状态统计结果
+	var totalCount, successCount, failedCount, retryingCount, pendingCount int64
+	for _, sc := range statusCounts {
+		totalCount += sc.Count
+		switch models.CallbackStatus(sc.Status) {
+		case models.CallbackStatusSuccess:
+			successCount = sc.Count
+		case models.CallbackStatusFailed:
+			failedCount = sc.Count
+		case models.CallbackStatusRetrying:
+			retryingCount = sc.Count
+		case models.CallbackStatusPending:
+			pendingCount = sc.Count
+		}
+	}
 
 	// 计算成功率
 	var successRate float64
@@ -869,27 +914,58 @@ func (api *ReleaseAPI) GetCallbackStats(c *gin.Context) {
 		successRate = float64(successCount) / float64(totalCount) * 100
 	}
 
-	// 统计平均延迟
+	// 统计平均延迟（使用相同的筛选条件）
 	var avgDuration float64
-	api.db.Model(&models.CallbackHistory{}).Where("status = ?", models.CallbackStatusSuccess).Select("AVG(duration)").Row().Scan(&avgDuration)
+	avgQuery := api.db.Model(&models.CallbackHistory{}).Where("status = ?", models.CallbackStatusSuccess)
+	if projectID != "" {
+		avgQuery = avgQuery.Joins("JOIN deploy_tasks ON callback_history.task_id = deploy_tasks.id").
+			Where("deploy_tasks.project_id = ?", projectID)
+	}
+	if startTime != "" {
+		avgQuery = avgQuery.Where("callback_history.created_at >= ?", startTime)
+	}
+	if endTime != "" {
+		avgQuery = avgQuery.Where("callback_history.created_at <= ?", endTime)
+	}
+	avgQuery.Select("COALESCE(AVG(duration), 0)").Row().Scan(&avgDuration)
 
-	// 按渠道统计
+	// 按渠道统计（使用相同的筛选条件）
 	var channelStats []struct {
 		Channel string `json:"channel"`
 		Count   int64  `json:"count"`
 	}
-	api.db.Model(&models.CallbackHistory{}).
-		Select("channel, COUNT(*) as count").
+	channelQuery := api.db.Model(&models.CallbackHistory{})
+	if projectID != "" {
+		channelQuery = channelQuery.Joins("JOIN deploy_tasks ON callback_history.task_id = deploy_tasks.id").
+			Where("deploy_tasks.project_id = ?", projectID)
+	}
+	if startTime != "" {
+		channelQuery = channelQuery.Where("callback_history.created_at >= ?", startTime)
+	}
+	if endTime != "" {
+		channelQuery = channelQuery.Where("callback_history.created_at <= ?", endTime)
+	}
+	channelQuery.Select("channel, COUNT(*) as count").
 		Group("channel").
 		Scan(&channelStats)
 
-	// 按事件类型统计
+	// 按事件类型统计（使用相同的筛选条件）
 	var eventStats []struct {
 		EventType string `json:"event_type"`
 		Count     int64  `json:"count"`
 	}
-	api.db.Model(&models.CallbackHistory{}).
-		Select("event_type, COUNT(*) as count").
+	eventQuery := api.db.Model(&models.CallbackHistory{})
+	if projectID != "" {
+		eventQuery = eventQuery.Joins("JOIN deploy_tasks ON callback_history.task_id = deploy_tasks.id").
+			Where("deploy_tasks.project_id = ?", projectID)
+	}
+	if startTime != "" {
+		eventQuery = eventQuery.Where("callback_history.created_at >= ?", startTime)
+	}
+	if endTime != "" {
+		eventQuery = eventQuery.Where("callback_history.created_at <= ?", endTime)
+	}
+	eventQuery.Select("event_type, COUNT(*) as count").
 		Group("event_type").
 		Scan(&eventStats)
 
@@ -906,6 +982,7 @@ func (api *ReleaseAPI) GetCallbackStats(c *gin.Context) {
 			"success_count":  successCount,
 			"failed_count":   failedCount,
 			"retrying_count": retryingCount,
+			"pending_count":  pendingCount,
 			"success_rate":   successRate,
 			"avg_duration":   avgDuration,
 			"by_channel":     channelStats,
@@ -1423,4 +1500,40 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// validateChannelURLs 验证渠道配置中的URL安全性
+func (api *ReleaseAPI) validateChannelURLs(channels []models.CallbackChannel) error {
+	for i, channel := range channels {
+		if !channel.Enabled {
+			continue
+		}
+
+		var urlToValidate string
+		switch channel.Type {
+		case models.CallbackTypeFeishu:
+			if config, ok := channel.Config.(*models.FeishuCallbackConfig); ok && config != nil {
+				urlToValidate = config.WebhookURL
+			}
+		case models.CallbackTypeDingTalk:
+			if config, ok := channel.Config.(*models.DingTalkCallbackConfig); ok && config != nil {
+				urlToValidate = config.WebhookURL
+			}
+		case models.CallbackTypeCustom:
+			if config, ok := channel.Config.(*models.CustomCallbackConfig); ok && config != nil {
+				urlToValidate = config.URL
+			}
+		case models.CallbackTypeWeChat:
+			// 企业微信使用 CorpID 而不是 URL，跳过验证
+			continue
+		}
+
+		if urlToValidate != "" {
+			result := callback.ValidateCallbackURL(urlToValidate)
+			if !result.Valid {
+				return fmt.Errorf("channel %d (%s): %s", i+1, channel.Type, result.Error)
+			}
+		}
+	}
+	return nil
 }

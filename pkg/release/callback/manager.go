@@ -3,18 +3,28 @@ package callback
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/voilet/quic-flow/pkg/release/models"
 	"gorm.io/gorm"
 )
 
+// 默认并发配置
+const (
+	DefaultMaxConcurrentCallbacks = 10 // 默认最大并发回调数
+	DefaultCallbackTimeout        = 30 * time.Second
+)
+
 // Manager 回调管理器
 type Manager struct {
-	db          *gorm.DB
-	sender      *CallbackSender
-	retryQueue  *RetryQueue
-	retryConfig RetryConfig
+	db             *gorm.DB
+	sender         *CallbackSender
+	retryQueue     *RetryQueue
+	retryConfig    RetryConfig
+	semaphore      chan struct{} // 并发控制信号量
+	maxConcurrent  int           // 最大并发数
+	callbackTimeout time.Duration // 回调超时时间
 }
 
 // NewManager 创建回调管理器
@@ -28,6 +38,9 @@ func NewManager(db *gorm.DB) *Manager {
 			MaxBackoff:     10 * time.Minute,
 			BackoffFactor:  2.0,
 		},
+		maxConcurrent:   DefaultMaxConcurrentCallbacks,
+		callbackTimeout: DefaultCallbackTimeout,
+		semaphore:       make(chan struct{}, DefaultMaxConcurrentCallbacks),
 	}
 
 	// 创建并启动重试队列
@@ -39,10 +52,18 @@ func NewManager(db *gorm.DB) *Manager {
 
 // NewManagerWithRetryConfig 创建带自定义重试配置的回调管理器
 func NewManagerWithRetryConfig(db *gorm.DB, retryConfig RetryConfig) *Manager {
+	maxConcurrent := DefaultMaxConcurrentCallbacks
+	if retryConfig.WorkerCount > 0 {
+		maxConcurrent = retryConfig.WorkerCount * 2 // 并发数为worker数的2倍
+	}
+
 	m := &Manager{
-		db:          db,
-		sender:      NewCallbackSender(),
-		retryConfig: retryConfig,
+		db:              db,
+		sender:          NewCallbackSender(),
+		retryConfig:     retryConfig,
+		maxConcurrent:   maxConcurrent,
+		callbackTimeout: DefaultCallbackTimeout,
+		semaphore:       make(chan struct{}, maxConcurrent),
 	}
 
 	// 创建并启动重试队列
@@ -172,59 +193,101 @@ func (m *Manager) isEventSubscribed(config models.CallbackConfig, eventType mode
 	return false
 }
 
-// sendCallbacks 发送回调到所有启用的渠道
+// sendCallbacks 发送回调到所有启用的渠道（带并发控制）
 func (m *Manager) sendCallbacks(config models.CallbackConfig, payload models.CallbackPayload, taskID string) {
+	var wg sync.WaitGroup
+
 	for _, channel := range config.Channels {
 		if !channel.Enabled {
 			continue
 		}
 
-		// 记录回调历史（开始）
-		history := &models.CallbackHistory{
-			TaskID:    taskID,
-			ConfigID:  config.ID,
-			EventType: payload.EventType,
-			Channel:   channel.Type,
-			Status:    models.CallbackStatusPending,
-			Request:   payload,
-		}
+		// 复制channel变量用于goroutine
+		ch := channel
 
-		// 保存历史记录
-		m.db.Create(history)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		// 发送回调
-		startTime := time.Now()
-		err := m.sendCallback(channel, payload)
-		duration := time.Since(startTime)
+			// 获取信号量（限制并发）
+			m.semaphore <- struct{}{}
+			defer func() { <-m.semaphore }()
 
-		// 更新历史记录
-		history.Duration = int(duration.Milliseconds())
-		if err != nil {
-			history.Status = models.CallbackStatusFailed
-			history.Error = err.Error()
-
-			// 回调失败，加入重试队列
-			if m.retryQueue != nil {
-				retryTask := &RetryTask{
-					CallbackID:   config.ID,
-					Channel:      channel,
-					Payload:      payload,
-					AttemptCount: 0,
-					MaxAttempts:  m.retryConfig.MaxAttempts,
-				}
-
-				if enqueueErr := m.retryQueue.Enqueue(retryTask); enqueueErr != nil {
-					// 记录重试队列错误
-					history.Error = fmt.Sprintf("%s (retry enqueue failed: %s)", err.Error(), enqueueErr.Error())
-				} else {
-					history.Status = models.CallbackStatusRetrying
-				}
-			}
-		} else {
-			history.Status = models.CallbackStatusSuccess
-		}
-		m.db.Save(history)
+			// 发送带超时控制的回调
+			m.sendCallbackWithHistory(config, ch, payload, taskID)
+		}()
 	}
+
+	// 等待所有回调完成
+	wg.Wait()
+}
+
+// sendCallbackWithHistory 发送单个回调并记录历史
+func (m *Manager) sendCallbackWithHistory(config models.CallbackConfig, channel models.CallbackChannel, payload models.CallbackPayload, taskID string) {
+	// 记录回调历史（开始）
+	history := &models.CallbackHistory{
+		TaskID:    taskID,
+		ConfigID:  config.ID,
+		EventType: payload.EventType,
+		Channel:   channel.Type,
+		Status:    models.CallbackStatusPending,
+		Request:   payload,
+	}
+
+	// 保存历史记录
+	m.db.Create(history)
+
+	// 创建带超时的上下文
+	ctx, cancel := context.WithTimeout(context.Background(), m.callbackTimeout)
+	defer cancel()
+
+	// 使用channel执行回调，支持超时
+	resultChan := make(chan error, 1)
+	startTime := time.Now()
+
+	go func() {
+		resultChan <- m.sendCallback(channel, payload)
+	}()
+
+	var err error
+	select {
+	case err = <-resultChan:
+		// 正常完成
+	case <-ctx.Done():
+		// 超时
+		err = fmt.Errorf("callback timeout after %v", m.callbackTimeout)
+	}
+
+	duration := time.Since(startTime)
+
+	// 更新历史记录
+	history.Duration = int(duration.Milliseconds())
+	if err != nil {
+		history.Status = models.CallbackStatusFailed
+		history.Error = err.Error()
+
+		// 回调失败，加入重试队列
+		if m.retryQueue != nil {
+			retryTask := &RetryTask{
+				TaskID:       taskID,
+				CallbackID:   config.ID,
+				Channel:      channel,
+				Payload:      payload,
+				AttemptCount: 0,
+				MaxAttempts:  m.retryConfig.MaxAttempts,
+			}
+
+			if enqueueErr := m.retryQueue.Enqueue(retryTask); enqueueErr != nil {
+				// 记录重试队列错误
+				history.Error = fmt.Sprintf("%s (retry enqueue failed: %s)", err.Error(), enqueueErr.Error())
+			} else {
+				history.Status = models.CallbackStatusRetrying
+			}
+		}
+	} else {
+		history.Status = models.CallbackStatusSuccess
+	}
+	m.db.Save(history)
 }
 
 // sendCallback 发送单个回调
